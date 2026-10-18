@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hyper Insta Bridge</title>
+  <meta name="description" content="Bridges Instagram Direct Messages to Telegram forum topics using instagrapi, MQTT/FBNS realtime delivery, and python-telegram-bot." />
+  <meta property="og:title" content="Hyper Insta Bridge" />
+  <meta property="og:description" content="Bridges Instagram Direct Messages to Telegram forum topics using instagrapi, MQTT/FBNS realtime delivery, and python-telegram-bot." />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-canvas: #080A0F;
+      --bg-surface: #0F131C;
+      --bg-elevated: #151B27;
+      --bg-input: #090C12;
+      --border: rgba(255, 255, 255, 0.075);
+      --border-strong: rgba(255, 255, 255, 0.14);
+      --border-focus: #38BDF8;
+      --text-primary: #F8FAFC;
+      --text-secondary: #94A3B8;
+      --text-muted: #64748B;
+      --accent: #0EA5E9;
+      --accent-hover: #38BDF8;
+      --ok: #10B981;
+      --warn: #F59E0B;
+      --err: #EF4444;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg-canvas);
+      color: var(--text-primary);
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 13.5px;
+      line-height: 1.55;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .mono {
+      font-family: 'JetBrains Mono', monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 3-Zone Top Bar */
+    header.topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 32px;
+      padding: 14px 28px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-surface);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+
+    .brand-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text-primary);
+      text-decoration: none;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    nav.topnav {
+      display: flex;
+      align-items: center;
+      gap: 26px;
+    }
+
+    nav.topnav a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      padding: 4px 0;
+      border-bottom: 2px solid transparent;
+      transition: color 150ms ease, border-color 150ms ease;
+    }
+
+    nav.topnav a:hover,
+    nav.topnav a.active {
+      color: var(--text-primary);
+      border-bottom-color: var(--accent);
+    }
+
+    /* Workspace Layout */
+    .app-shell {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      flex: 1;
+      max-width: 1440px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    aside.sidebar {
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border);
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    main.viewport {
+      padding: 26px 32px 48px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+      overflow-y: auto;
+    }
+
+    @media (max-width: 980px) {
+      .app-shell { grid-template-columns: 1fr; }
+      aside.sidebar { border-right: none; border-bottom: 1px solid var(--border); }
+      nav.topnav { display: none; }
+      main.viewport { padding: 20px 18px 40px; }
+    }
+
+    /* Typography & Labels */
+    .section-kicker {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 5px;
+    }
+
+    /* Inputs & Buttons */
+    input[type="text"],
+    input[type="password"],
+    input[type="number"],
+    textarea,
+    select {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 9px 12px;
+      border-radius: 7px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 150ms ease;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      border-color: var(--border-focus);
+    }
+
+    button {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+      border: 1px solid var(--border-strong);
+      padding: 8px 14px;
+      border-radius: 7px;
+      font-size: 12.5px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 150ms ease, opacity 150ms ease;
+    }
+
+    button:hover:not(:disabled) {
+      background: #1E2738;
+    }
+
+    button:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #06090E;
+    }
+
+    button.primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    button.success-btn {
+      background: rgba(16, 185, 129, 0.14);
+      border-color: rgba(16, 185, 129, 0.45);
+      color: var(--ok);
+    }
+
+    button.danger {
+      background: transparent;
+      color: var(--err);
+      border-color: rgba(239, 68, 68, 0.35);
+    }
+
+    /* Sidebar Navigation Items */
+    .nav-list {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      text-align: left;
+      padding: 9px 11px;
+      border-radius: 7px;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--text-secondary);
+      font-weight: 500;
+      font-size: 13px;
+    }
+
+    .nav-item:hover {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      background: rgba(14, 165, 233, 0.12);
+      border-color: rgba(14, 165, 233, 0.4);
+      color: var(--text-primary);
+    }
+
+    /* Panels */
+    .panel {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 22px 24px;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding-bottom: 14px;
+      margin-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 15.5px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .meta-inline {
+      font-size: 12px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Account Bridge Banner */
+    .bridge-bar {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 22px;
+      align-items: start;
+    }
+
+    .grid-equal {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 22px;
+      align-items: start;
+    }
+
+    @media (max-width: 1100px) {
+      .grid-2, .grid-equal { grid-template-columns: 1fr; }
+    }
+
+    .form-2col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .field { margin-bottom: 13px; }
+
+    /* Segmented Auth Mode Switch */
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 3px;
+      margin-bottom: 18px;
+    }
+
+    .segmented button {
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      padding: 7px 10px;
+      border-radius: 5px;
+      font-size: 12px;
+    }
+
+    .segmented button.active {
+      background: var(--bg-elevated);
+      color: var(--text-primary);
+    }
+
+    /* Realtime & FBNS Toggle Switches */
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 13px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .switch-row:last-of-type { border-bottom: none; }
+
+    input[type="checkbox"].switch {
+      width: 40px;
+      height: 21px;
+      appearance: none;
+      background: #252E40;
+      border-radius: 12px;
+      position: relative;
+      cursor: pointer;
+      transition: background 150ms ease;
+      flex-shrink: 0;
+    }
+
+    input[type="checkbox"].switch::after {
+      content: "";
+      position: absolute;
+      top: 2.5px;
+      left: 3px;
+      width: 16px;
+      height: 16px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 150ms ease;
+    }
+
+    input[type="checkbox"].switch:checked { background: var(--accent); }
+    input[type="checkbox"].switch:checked::after { transform: translateX(18px); }
+
+    details.drawer {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--bg-input);
+      padding: 9px 13px;
+      margin-bottom: 14px;
+    }
+
+    details.drawer summary {
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      user-select: none;
+    }
+
+    /* Simple Live Logs */
+    .log-console {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      height: 250px;
+      overflow-y: auto;
+      padding: 12px 14px;
+      font-size: 12px;
+      line-height: 1.65;
+    }
+
+    .log-line {
+      white-space: pre-wrap;
+      word-break: break-word;
+      padding: 1.5px 0;
+    }
+
+    .log-ts { color: var(--text-muted); margin-right: 8px; }
+    .log-lvl-INFO { color: #38BDF8; margin-right: 6px; }
+    .log-lvl-WARNING { color: var(--warn); margin-right: 6px; }
+    .log-lvl-ERROR { color: var(--err); font-weight: 600; margin-right: 6px; }
+
+    .text-ok { color: var(--ok); }
+    .text-warn { color: var(--warn); }
+    .text-err { color: var(--err); }
+  </style>
+</head>
+<body>
+  <!-- Top Bar Contract: Zone 1 Brand | Zone 2 Nav | Zone 3 Primary Action -->
+  <header class="topbar">
+    <a href="#" class="brand-title">Hyper Insta Bridge</a>
+    <nav class="topnav">
+      <a href="#sec-bridge" class="active">Bridge &amp; Accounts</a>
+      <a href="#sec-auth">Authentication</a>
+      <a href="#sec-telegram">Telegram &amp; Bot</a>
+      <a href="#sec-logs">Live Logs</a>
+    </nav>
+    <div>
+      <button class="primary" id="btn-top-download" onclick="downloadActiveSession()" disabled>Download Session JSON</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <!-- Sidebar: User Workspaces + Instagram Accounts + Bot DM Info -->
+    <aside class="sidebar">
+      <div>
+        <div class="section-kicker">
+          <span>User Workspace DB</span>
+        </div>
+        <div style="display: flex; gap: 6px; margin-bottom: 10px;">
+          <input type="text" id="sidebar-user-input" class="mono" placeholder="Username (no pass)..." />
+          <button class="primary" onclick="openUserFromSidebar()">Open</button>
+        </div>
+        <div id="user-list" class="nav-list"></div>
+      </div>
+
+      <div id="sidebar-ig-wrap" style="display: none; flex-direction: column; flex: 1;">
+        <div class="section-kicker">
+          <span>Instagram Accounts</span>
+          <button onclick="selectIgAccount('__NEW__')" style="padding: 3px 9px; font-size: 11px;">+ Add IG</button>
+        </div>
+        <div id="ig-list" class="nav-list"></div>
+      </div>
+
+      <div style="border-top: 1px solid var(--border); padding-top: 14px; font-size: 12px; color: var(--text-secondary);">
+        <div>Active DB: <strong id="meta-user" class="mono">None</strong></div>
+        <div id="meta-bot-hint" style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
+          Start the Telegram Bot in private chat with <code class="mono">/start</code> to manage directly from Telegram.
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Viewport -->
+    <main class="viewport">
+      <!-- Welcome / Onboarding View when no User DB is open -->
+      <div id="welcome-view" class="panel" style="text-align: center; padding: 56px 24px;">
+        <h2 style="margin: 0 0 8px 0; font-size: 20px;">Open or Register Your User Workspace</h2>
+        <p style="color: var(--text-secondary); max-width: 520px; margin: 0 auto 22px;">
+          Enter your username to create or open your database (no password required), or send <code class="mono">/start</code> directly to the Telegram Bot in private chat. Inside your workspace you can add multiple Instagram accounts and choose which account to attach to the Telegram bridge.
+        </p>
+        <div style="display: flex; gap: 8px; max-width: 360px; margin: 0 auto;">
+          <input type="text" id="welcome-user-input" class="mono" placeholder="e.g. rex or arshman" />
+          <button class="primary" onclick="openUserFromWelcome()">Open Workspace</button>
+        </div>
+      </div>
+
+      <!-- Active Workspace View -->
+      <div id="workspace-view" style="display: none; flex-direction: column; gap: 22px;">
+
+        <!-- 2FA / Challenge Code Prompt Banner -->
+        <div id="code-banner" style="display: none; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 10px; padding: 14px 20px; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+          <div>
+            <div style="font-weight: 600; color: var(--warn);">Instagram Verification / 2FA Code Required</div>
+            <div id="code-hint" style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;"></div>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="code-input" class="mono" placeholder="6 or 8 digit code" style="width: 175px;" />
+            <button class="primary" onclick="submitCode()">Submit Code</button>
+          </div>
+        </div>
+
+        <!-- Selected Account Header & Bridge Attachment Selector -->
+        <section id="sec-bridge" class="bridge-bar">
+          <div>
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <span class="mono" style="font-size: 17px; font-weight: 700;" id="header-ig-handle">@account</span>
+              <span id="header-ig-status" class="text-warn" style="font-size: 12.5px; font-weight: 600;">Not logged in</span>
+              <span style="color: var(--text-muted);">·</span>
+              <span id="header-bridge-state" style="font-size: 12.5px; color: var(--text-secondary);">Not attached to bridge</span>
+            </div>
+            <div class="meta-inline" id="header-ig-metrics" style="margin-top: 4px;">
+              Select an Instagram account from the left sidebar or add a new account below.
+            </div>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <button id="btn-attach-bridge" class="primary" onclick="attachCurrentToBridge()" disabled>Attach to Telegram Bridge</button>
+            <button id="btn-bar-relogin" onclick="reloginSlot()" disabled>Relogin</button>
+            <button id="btn-bar-download" onclick="downloadActiveSession()" disabled>Download .json</button>
+          </div>
+        </section>
+
+        <!-- Row 1: Authentication Studio + Realtime/FBNS & Device Inspector -->
+        <section id="sec-auth" class="grid-2">
+          <!-- Left: Instagram Login (Password / Cookie / Session JSON) -->
+          <div class="panel">
+            <div class="panel-header">
+              <h2 class="panel-title" id="auth-card-title">Instagram Authentication</h2>
+              <div class="meta-inline">
+                <span id="auth-mode-caption">Realtime &amp; FBNS auto-enabled on password login</span>
+              </div>
+            </div>
+
+            <div class="segmented">
+              <button id="tab-pw" class="active" onclick="setAuthTab('password')">Password Login</button>
+              <button id="tab-ck" onclick="setAuthTab('cookie')">Cookie Login</button>
+              <button id="tab-js" onclick="setAuthTab('json')">Import Session JSON</button>
+            </div>
+
+            <div class="field">
+              <label>Instagram Username</label>
+              <input type="text" id="ig-username" class="mono" placeholder="e.g. i.tompatrick" />
+            </div>
+
+            <!-- Tab 1: Password Login -->
+            <div id="pane-password">
+              <div class="form-2col">
+                <div class="field">
+                  <label>Password <span id="pw-saved-badge" class="text-ok"></span></label>
+                  <input type="password" id="ig-password" placeholder="Instagram password" />
+                </div>
+                <div class="field">
+                  <label>HTTP / SOCKS5 Proxy (Optional)</label>
+                  <input type="text" id="ig-proxy" class="mono" placeholder="http://user:pass@host:port" />
+                </div>
+              </div>
+
+              <details class="drawer">
+                <summary>2FA TOTP Secret &amp; Device Region Settings (Optional)</summary>
+                <div class="form-2col" style="margin-top: 10px;">
+                  <div class="field">
+                    <label>2FA TOTP Secret (Base32) <span id="totp-saved-badge" class="text-ok"></span></label>
+                    <input type="password" id="ig-totp" class="mono" placeholder="Authenticator secret" />
+                  </div>
+                  <div class="field">
+                    <label>Challenge Phone Number</label>
+                    <input type="text" id="ig-phone" class="mono" placeholder="+1..." />
+                  </div>
+                </div>
+                <div class="form-2col">
+                  <div class="field" style="margin-bottom: 0;">
+                    <label>Locale &amp; Country</label>
+                    <div style="display: flex; gap: 6px;">
+                      <input type="text" id="ig-locale" class="mono" placeholder="en_US" />
+                      <input type="text" id="ig-country" class="mono" placeholder="US" style="width: 75px;" />
+                    </div>
+                  </div>
+                  <div class="field" style="margin-bottom: 0;">
+                    <label>Timezone Offset (Seconds)</label>
+                    <input type="number" id="ig-tz" class="mono" placeholder="e.g. 18000" />
+                  </div>
+                </div>
+              </details>
+
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px;">
+                <span style="font-size: 12px; color: var(--text-muted);">Auto-enables Realtime MQTT &amp; FBNS</span>
+                <button class="primary" id="btn-pw-login" onclick="loginPassword()">Login with Password</button>
+              </div>
+            </div>
+
+            <!-- Tab 2: Cookie Login -->
+            <div id="pane-cookie" style="display: none;">
+              <div class="field">
+                <label>Browser Cookie (sessionid value, Cookie header, or JSON cookie export)</label>
+                <textarea id="ig-cookie" class="mono" rows="3" placeholder="Paste sessionid cookie or full JSON cookie array"></textarea>
+              </div>
+              <div class="field">
+                <label>HTTP / SOCKS5 Proxy (Optional)</label>
+                <input type="text" id="ig-cookie-proxy" class="mono" placeholder="http://user:pass@host:port" />
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px;">
+                <span style="font-size: 12px; color: var(--text-muted);">Auto-disables Realtime MQTT &amp; FBNS</span>
+                <button class="primary" id="btn-ck-login" onclick="loginCookie()">Login with Cookie</button>
+              </div>
+            </div>
+
+            <!-- Tab 3: Import Session JSON -->
+            <div id="pane-json" style="display: none;">
+              <div class="field">
+                <label>Paste instagrapi Session JSON or Upload .json File</label>
+                <textarea id="ig-session-json" class="mono" rows="3" placeholder='{"uuids": {...}, "authorization_data": {...}}'></textarea>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                <input type="file" accept=".json,application/json" onchange="loadJsonFile(event)" style="font-size: 12px; max-width: 230px;" />
+                <button class="primary" onclick="importSession()">Import &amp; Verify Session</button>
+              </div>
+            </div>
+
+            <div id="auth-feedback" style="font-size: 12.5px; margin-top: 12px; min-height: 18px;"></div>
+          </div>
+
+          <!-- Right: Realtime & FBNS Switches + Device & Session Inspector -->
+          <div class="panel">
+            <div class="panel-header">
+              <h2 class="panel-title">Realtime Channels &amp; Device Session</h2>
+              <div class="meta-inline">
+                <span id="rt-header-summary" class="mono">MQTT: off · FBNS: off</span>
+              </div>
+            </div>
+
+            <!-- Only the 2 requested toggles: Realtime MQTT and FBNS Push -->
+            <div class="switch-row">
+              <div>
+                <div style="font-weight: 600; font-size: 13.5px;">Realtime MQTT</div>
+                <div style="font-size: 12px; color: var(--text-secondary);" id="rt-desc">edge-mqtt.facebook.com live DM &amp; typing stream</div>
+              </div>
+              <input type="checkbox" class="switch" id="sw-realtime" onchange="toggleRealtime('realtime', this.checked)" disabled />
+            </div>
+
+            <div class="switch-row">
+              <div>
+                <div style="font-weight: 600; font-size: 13.5px;">FBNS Push</div>
+                <div style="font-size: 12px; color: var(--text-secondary);" id="fbns-desc">mqtt-mini.facebook.com push notification channel</div>
+              </div>
+              <input type="checkbox" class="switch" id="sw-fbns" onchange="toggleRealtime('fbns', this.checked)" disabled />
+            </div>
+
+            <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
+              <div class="section-kicker"><span>Simulated Android Device &amp; Session</span></div>
+              <pre id="device-info-pre" class="mono" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 7px; padding: 11px 13px; font-size: 11.5px; color: var(--text-secondary); margin: 0 0 14px 0; white-space: pre-wrap;">No active session</pre>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button id="btn-reset-device" onclick="resetDevice()" disabled>Reset Device UUID</button>
+                <button id="btn-logout-slot" onclick="logoutSlot()" disabled>Logout</button>
+                <button id="btn-remove-slot" class="danger" onclick="removeSlot()" style="margin-left: auto;" disabled>Remove Account</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Row 2: Telegram Bot / Forum Group Config + Bridged Topics & Bot Command Console -->
+        <section id="sec-telegram" class="grid-equal">
+          <div class="panel">
+            <div class="panel-header">
+              <h2 class="panel-title">Telegram Bot &amp; Forum Group Routing</h2>
+              <div class="meta-inline">
+                <span id="tg-conn-label" class="text-warn">Not connected</span>
+              </div>
+            </div>
+
+            <p style="margin: 0 0 14px 0; font-size: 12px; color: var(--text-secondary);">
+              Commands and account management run <strong>directly in the Bot's private chat</strong> (<code class="mono" id="bot-dm-handle">@bot</code> → send <code class="mono">/start</code>). Your Forum Group (<code class="mono">-100...</code>) is used purely for Instagram DM conversation topics.
+            </p>
+
+            <div class="form-2col">
+              <div class="field">
+                <label>Forum Group Chat ID (Topics)</label>
+                <input type="text" id="tg-chat-id" class="mono" placeholder="-1001234567890" />
+              </div>
+              <div class="field">
+                <label>Your Telegram User ID (Bot DM Admin)</label>
+                <input type="text" id="tg-admin-id" class="mono" placeholder="Numeric user ID" />
+              </div>
+            </div>
+
+            <div class="field">
+              <label>Custom Bot Token (Optional — leave blank to use default bot)</label>
+              <input type="password" id="tg-token" class="mono" placeholder="Uses server TELEGRAM_BOT_TOKEN if blank" />
+            </div>
+
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px;">
+              <span id="tg-feedback" style="font-size: 12px; color: var(--text-secondary);"></span>
+              <button class="primary" onclick="saveTelegram()">Save Telegram Settings</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-header">
+              <h2 class="panel-title">Bridged Topics &amp; Command Runner</h2>
+              <div class="meta-inline">
+                <span id="topics-count-label" class="mono">0 linked topics</span>
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap;">
+              <input type="text" id="cmd-input" class="mono" placeholder="Execute bot command (/status, /session, /ping, /help)" style="flex: 1;" />
+              <button class="primary" onclick="runBotCommand()">Execute</button>
+              <button onclick="quickCmd('/status')">/status</button>
+              <button onclick="quickCmd('/session')">/session</button>
+            </div>
+
+            <div id="topics-list" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 7px; max-height: 150px; overflow-y: auto; padding: 10px 13px; font-size: 12px;"></div>
+          </div>
+        </section>
+
+        <!-- Row 3: Simple Live Logs -->
+        <section id="sec-logs" class="panel">
+          <div class="panel-header" style="margin-bottom: 12px; padding-bottom: 12px;">
+            <h2 class="panel-title">Live Logs</h2>
+            <div style="display: flex; gap: 8px;">
+              <button onclick="downloadLogs()" style="padding: 5px 11px; font-size: 12px;">Download</button>
+              <button onclick="clearLogs()" style="padding: 5px 11px; font-size: 12px;">Clear</button>
+            </div>
+          </div>
+          <div id="log-box" class="log-console mono"></div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let currentUser = localStorage.getItem('hib_active_user') || '';
+    let activeIg = '';
+    let authTab = 'password';
+    let lastLogId = 0;
+    let logs = [];
+    let hydratedKey = '';
+
+    async function api(path, options = {}) {
+      const res = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+      return data;
+    }
+
+    function setAuthTab(tab) {
+      authTab = tab;
+      document.getElementById('tab-pw').className = tab === 'password' ? 'active' : '';
+      document.getElementById('tab-ck').className = tab === 'cookie' ? 'active' : '';
+      document.getElementById('tab-js').className = tab === 'json' ? 'active' : '';
+      document.getElementById('pane-password').style.display = tab === 'password' ? 'block' : 'none';
+      document.getElementById('pane-cookie').style.display = tab === 'cookie' ? 'block' : 'none';
+      document.getElementById('pane-json').style.display = tab === 'json' ? 'block' : 'none';
+      document.getElementById('auth-mode-caption').textContent =
+        tab === 'password'
+          ? 'Realtime & FBNS auto-enabled on password login'
+          : (tab === 'cookie' ? 'Realtime & FBNS auto-disabled on cookie login' : 'Restore an instagrapi session JSON file');
+    }
+
+    async function loadUsers() {
+      try {
+        const data = await api('/api/users');
+        const users = data.users || [];
+        const userListEl = document.getElementById('user-list');
+
+        if (!currentUser && users.length > 0) {
+          currentUser = users[0].username;
+          localStorage.setItem('hib_active_user', currentUser);
+        }
+
+        if (users.length === 0) {
+          userListEl.innerHTML = '<div style="font-size: 12px; color: var(--text-muted); padding: 4px 0;">No workspaces yet.</div>';
+        } else {
+          userListEl.innerHTML = users.map(u => {
+            const isAct = u.username === currentUser;
+            return `
+              <button class="nav-item ${isAct ? 'active' : ''}" onclick="switchUser('${u.username}')">
+                <span class="mono">${u.username}</span>
+                <span style="font-size: 11px; color: var(--text-muted);">${u.logged_in_count}/${u.account_count} IG</span>
+              </button>
+            `;
+          }).join('');
+        }
+
+        if (currentUser) {
+          document.getElementById('welcome-view').style.display = 'none';
+          document.getElementById('workspace-view').style.display = 'flex';
+          document.getElementById('sidebar-ig-wrap').style.display = 'flex';
+          await refreshState();
+        } else {
+          document.getElementById('welcome-view').style.display = 'block';
+          document.getElementById('workspace-view').style.display = 'none';
+          document.getElementById('sidebar-ig-wrap').style.display = 'none';
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function openUser(raw) {
+      const clean = (raw || '').trim();
+      if (!clean) return;
+      const res = await api('/api/users', {
+        method: 'POST',
+        body: JSON.stringify({ username: clean })
+      });
+      currentUser = res.username;
+      localStorage.setItem('hib_active_user', currentUser);
+      activeIg = res.state.bridged_ig || res.state.active_ig || '';
+      logs = [];
+      lastLogId = 0;
+      hydratedKey = '';
+      await loadUsers();
+    }
+
+    function openUserFromSidebar() {
+      const inp = document.getElementById('sidebar-user-input');
+      openUser(inp.value);
+      inp.value = '';
+    }
+
+    function openUserFromWelcome() {
+      const inp = document.getElementById('welcome-user-input');
+      openUser(inp.value);
+    }
+
+    async function switchUser(uname) {
+      currentUser = uname;
+      localStorage.setItem('hib_active_user', currentUser);
+      activeIg = '';
+      logs = [];
+      lastLogId = 0;
+      hydratedKey = '';
+      await loadUsers();
+    }
+
+    function selectIgAccount(igName) {
+      activeIg = igName;
+      hydratedKey = '';
+      document.getElementById('auth-feedback').textContent = '';
+      if (igName === '__NEW__') {
+        document.getElementById('ig-username').value = '';
+        document.getElementById('ig-password').value = '';
+        document.getElementById('ig-cookie').value = '';
+        document.getElementById('ig-proxy').value = '';
+        document.getElementById('ig-cookie-proxy').value = '';
+      }
+      refreshState();
+    }
+
+    async function refreshState() {
+      if (!currentUser) return;
+      try {
+        const st = await api(`/api/users/${encodeURIComponent(currentUser)}/state`);
+        document.getElementById('meta-user').textContent = st.username;
+        if (st.tg_bot_username) {
+          document.getElementById('bot-dm-handle').textContent = '@' + st.tg_bot_username;
+          document.getElementById('meta-bot-hint').innerHTML =
+            `Bot: <strong class="mono">@${st.tg_bot_username}</strong> — send <code class="mono">/start</code> in Telegram DM to manage directly from Telegram.`;
+        }
+
+        const accounts = st.accounts || [];
+        if (!activeIg) {
+          activeIg = st.bridged_ig || st.active_ig || (accounts[0] ? accounts[0].ig_username : '__NEW__');
+        }
+        if (activeIg !== '__NEW__' && !accounts.some(a => a.ig_username === activeIg)) {
+          activeIg = accounts[0] ? accounts[0].ig_username : '__NEW__';
+        }
+
+        // Sidebar Instagram accounts list with Bridge indicator
+        const igListEl = document.getElementById('ig-list');
+        if (accounts.length === 0) {
+          igListEl.innerHTML = '<div style="font-size: 12px; color: var(--text-muted); padding: 4px 0;">No Instagram accounts yet.</div>';
+        } else {
+          igListEl.innerHTML = accounts.map(a => {
+            const isAct = a.ig_username === activeIg;
+            const isBridged = a.attached_to_bridge;
+            const stColor = a.ig_logged_in ? 'text-ok' : 'text-warn';
+            const rightTag = isBridged ? 'Bridged' : (a.ig_logged_in ? 'Online' : 'Offline');
+            return `
+              <button class="nav-item ${isAct ? 'active' : ''}" onclick="selectIgAccount('${a.ig_username}')">
+                <span class="mono">@${a.ig_username}</span>
+                <span class="${isBridged ? 'text-ok' : stColor}" style="font-size: 11px;">${rightTag}</span>
+              </button>
+            `;
+          }).join('');
+        }
+
+        // Telegram section status
+        const tgLabel = document.getElementById('tg-conn-label');
+        if (st.tg_running) {
+          tgLabel.textContent = `Connected${st.tg_bot_username ? ' (@' + st.tg_bot_username + ')' : ''}`;
+          tgLabel.className = 'text-ok';
+        } else if (st.tg_chat_id) {
+          tgLabel.textContent = st.tg_error || `Group ${st.tg_chat_id} configured`;
+          tgLabel.className = 'text-warn';
+        } else {
+          tgLabel.textContent = st.tg_bot_username ? `Bot @${st.tg_bot_username} online · Set Group ID` : 'Set Group Chat ID';
+          tgLabel.className = 'text-warn';
+        }
+
+        const slot = accounts.find(a => a.ig_username === activeIg) || null;
+        const hKey = `${currentUser}:${activeIg}`;
+        if (hydratedKey !== hKey) {
+          hydratedKey = hKey;
+          document.getElementById('tg-chat-id').value = st.tg_chat_id || '';
+          document.getElementById('tg-admin-id').value = st.tg_admin_id || '';
+          document.getElementById('tg-token').value = '';
+          document.getElementById('ig-username').value = slot ? slot.ig_username : '';
+          document.getElementById('ig-password').value = '';
+          document.getElementById('ig-proxy').value = slot ? slot.proxy : '';
+          document.getElementById('ig-cookie-proxy').value = slot ? slot.proxy : '';
+          document.getElementById('ig-phone').value = slot ? slot.phone_number : '';
+          document.getElementById('ig-locale').value = slot ? slot.locale : 'en_US';
+          document.getElementById('ig-country').value = slot ? slot.country : 'US';
+          document.getElementById('ig-tz').value = slot ? slot.timezone_offset : '';
+        }
+
+        const codeBanner = document.getElementById('code-banner');
+        if (slot && slot.waiting_for_code) {
+          codeBanner.style.display = 'flex';
+          document.getElementById('code-hint').textContent = slot.code_hint || 'Enter the verification code sent by Instagram.';
+        } else {
+          codeBanner.style.display = 'none';
+        }
+
+        if (slot) {
+          document.getElementById('header-ig-handle').textContent = '@' + slot.ig_username;
+          const stEl = document.getElementById('header-ig-status');
+          stEl.textContent = slot.ig_logged_in
+            ? `Logged In (${slot.login_method})`
+            : (slot.login_in_progress ? 'Logging In...' : 'Logged Out');
+          stEl.className = slot.ig_logged_in ? 'text-ok' : 'text-warn';
+
+          const bridgeStateEl = document.getElementById('header-bridge-state');
+          const attachBtn = document.getElementById('btn-attach-bridge');
+          if (slot.attached_to_bridge) {
+            bridgeStateEl.textContent = 'Attached to Telegram Bridge';
+            bridgeStateEl.className = 'text-ok';
+            attachBtn.textContent = 'Attached to Bridge ✓';
+            attachBtn.className = 'success-btn';
+            attachBtn.disabled = true;
+          } else {
+            bridgeStateEl.textContent = 'Standby (Click Attach to route DMs to Telegram)';
+            bridgeStateEl.className = '';
+            attachBtn.textContent = 'Attach to Telegram Bridge';
+            attachBtn.className = 'primary';
+            attachBtn.disabled = false;
+          }
+
+          document.getElementById('header-ig-metrics').textContent =
+            `${slot.linked_topics} bridged forum topics · ${slot.forwarded} DMs forwarded · Proxy: ${slot.proxy ? 'configured' : 'direct'}`;
+
+          document.getElementById('pw-saved-badge').textContent = slot.has_password ? '(Saved)' : '';
+          document.getElementById('totp-saved-badge').textContent = slot.has_totp ? '(Saved)' : '';
+
+          const swRt = document.getElementById('sw-realtime');
+          const swFb = document.getElementById('sw-fbns');
+          swRt.disabled = false;
+          swFb.disabled = false;
+          swRt.checked = Boolean(slot.realtime);
+          swFb.checked = Boolean(slot.fbns);
+
+          document.getElementById('rt-header-summary').textContent =
+            `MQTT: ${slot.realtime ? (slot.rt_connected ? 'connected' : 'on') : 'off'} · FBNS: ${slot.fbns ? (slot.fbns_connected ? 'connected' : 'on') : 'off'}`;
+
+          document.getElementById('rt-desc').textContent = slot.realtime
+            ? (slot.rt_connected ? `Connected (${slot.rt_events} events)` : (slot.rt_error || 'Enabled · standby'))
+            : 'Disabled (polling mode)';
+          document.getElementById('fbns-desc').textContent = slot.fbns
+            ? (slot.fbns_connected ? `Connected (${slot.fbns_pushes} pushes)` : (slot.fbns_error || 'Enabled · standby'))
+            : 'Disabled';
+
+          document.getElementById('device-info-pre').textContent = slot.session_info;
+
+          const canDl = slot.ig_logged_in || slot.has_saved_session;
+          document.getElementById('btn-top-download').disabled = !canDl;
+          document.getElementById('btn-bar-download').disabled = !canDl;
+          document.getElementById('btn-bar-relogin').disabled = !canDl;
+          document.getElementById('btn-reset-device').disabled = false;
+          document.getElementById('btn-logout-slot').disabled = !slot.ig_logged_in;
+          document.getElementById('btn-remove-slot').disabled = false;
+
+          document.getElementById('topics-count-label').textContent = `${slot.linked_topics} linked topics`;
+          const tBox = document.getElementById('topics-list');
+          if (!slot.topics || slot.topics.length === 0) {
+            tBox.innerHTML = '<div style="color: var(--text-muted);">No forum topics created yet for this account.</div>';
+          } else {
+            tBox.innerHTML = slot.topics.map(t => `
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border);">
+                <span class="mono">${escapeHtml(t.title)} <span style="color: var(--text-muted);">→ Topic #${t.topic_id}</span></span>
+                <button onclick="unlinkTopic('${t.thread_id}')" style="padding: 2px 8px; font-size: 11px;">Unlink</button>
+              </div>
+            `).join('');
+          }
+        } else {
+          document.getElementById('header-ig-handle').textContent = 'New Instagram Account';
+          const stEl = document.getElementById('header-ig-status');
+          stEl.textContent = 'Ready to Add';
+          stEl.className = 'text-warn';
+          document.getElementById('header-bridge-state').textContent = 'Will attach on login';
+          document.getElementById('header-ig-metrics').textContent = 'Enter Instagram credentials below to add this account to your database.';
+          document.getElementById('btn-attach-bridge').disabled = true;
+          document.getElementById('btn-bar-relogin').disabled = true;
+          document.getElementById('btn-bar-download').disabled = true;
+          document.getElementById('btn-top-download').disabled = true;
+          document.getElementById('sw-realtime').disabled = true;
+          document.getElementById('sw-fbns').disabled = true;
+          document.getElementById('sw-realtime').checked = true;
+          document.getElementById('sw-fbns').checked = true;
+          document.getElementById('device-info-pre').textContent = 'No session loaded yet.';
+          document.getElementById('btn-reset-device').disabled = true;
+          document.getElementById('btn-logout-slot').disabled = true;
+          document.getElementById('btn-remove-slot').disabled = true;
+          document.getElementById('topics-count-label').textContent = '0 linked topics';
+          document.getElementById('topics-list').innerHTML = '<div style="color: var(--text-muted);">Log in to view linked Telegram topics.</div>';
+        }
+
+        await fetchLogs();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function attachCurrentToBridge() {
+      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/attach`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: activeIg })
+      });
+      await refreshState();
+    }
+
+    async function loginPassword() {
+      const igUser = document.getElementById('ig-username').value.trim();
+      const fb = document.getElementById('auth-feedback');
+      const btn = document.getElementById('btn-pw-login');
+      if (!igUser) {
+        fb.textContent = 'Enter the Instagram username first.';
+        fb.className = 'text-warn';
+        return;
+      }
+      btn.disabled = true;
+      fb.textContent = 'Logging in with password (Realtime & FBNS auto-enabled)...';
+      fb.className = 'text-warn';
+      try {
+        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/login`, {
+          method: 'POST',
+          body: JSON.stringify({
+            ig_username: igUser,
+            password: document.getElementById('ig-password').value,
+            proxy: document.getElementById('ig-proxy').value.trim(),
+            totp_secret: document.getElementById('ig-totp').value.trim(),
+            phone_number: document.getElementById('ig-phone').value.trim(),
+            locale: document.getElementById('ig-locale').value.trim(),
+            country: document.getElementById('ig-country').value.trim(),
+            timezone_offset: document.getElementById('ig-tz').value.trim()
+          })
+        });
+        activeIg = res.ig_username || igUser;
+        hydratedKey = `${currentUser}:${activeIg}`;
+        fb.textContent = res.message;
+        fb.className = res.ok ? 'text-ok' : 'text-err';
+        await loadUsers();
+      } catch (e) {
+        fb.textContent = e.message;
+        fb.className = 'text-err';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function loginCookie() {
+      const igUser = document.getElementById('ig-username').value.trim();
+      const cookie = document.getElementById('ig-cookie').value.trim();
+      const proxy = document.getElementById('ig-cookie-proxy').value.trim();
+      const fb = document.getElementById('auth-feedback');
+      const btn = document.getElementById('btn-ck-login');
+      if (!igUser || !cookie) {
+        fb.textContent = 'Enter both the Instagram username and cookie.';
+        fb.className = 'text-warn';
+        return;
+      }
+      btn.disabled = true;
+      fb.textContent = 'Logging in with cookie (Realtime & FBNS auto-disabled)...';
+      fb.className = 'text-warn';
+      try {
+        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/cookie`, {
+          method: 'POST',
+          body: JSON.stringify({ ig_username: igUser, cookie, proxy })
+        });
+        activeIg = res.ig_username || igUser;
+        hydratedKey = `${currentUser}:${activeIg}`;
+        fb.textContent = res.message;
+        fb.className = res.ok ? 'text-ok' : 'text-err';
+        if (res.ok) document.getElementById('ig-cookie').value = '';
+        await loadUsers();
+      } catch (e) {
+        fb.textContent = e.message;
+        fb.className = 'text-err';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function loadJsonFile(ev) {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const r = new FileReader();
+      r.onload = () => { document.getElementById('ig-session-json').value = r.result; };
+      r.readAsText(f);
+    }
+
+    async function importSession() {
+      const igUser = document.getElementById('ig-username').value.trim();
+      const rawJson = document.getElementById('ig-session-json').value.trim();
+      const proxy = document.getElementById('ig-proxy').value.trim();
+      const fb = document.getElementById('auth-feedback');
+      if (!igUser || !rawJson) {
+        fb.textContent = 'Enter the Instagram username and session JSON.';
+        fb.className = 'text-warn';
+        return;
+      }
+      fb.textContent = 'Importing and verifying session JSON...';
+      fb.className = 'text-warn';
+      try {
+        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/import`, {
+          method: 'POST',
+          body: JSON.stringify({ ig_username: igUser, session_json: rawJson, proxy })
+        });
+        activeIg = res.ig_username || igUser;
+        hydratedKey = `${currentUser}:${activeIg}`;
+        fb.textContent = res.message;
+        fb.className = res.ok ? 'text-ok' : 'text-err';
+        await loadUsers();
+      } catch (e) {
+        fb.textContent = e.message;
+        fb.className = 'text-err';
+      }
+    }
+
+    async function toggleRealtime(key, val) {
+      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/toggle`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: activeIg, [key]: val })
+      });
+      await refreshState();
+    }
+
+    async function reloginSlot() {
+      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      const fb = document.getElementById('auth-feedback');
+      fb.textContent = 'Re-logging in...';
+      fb.className = 'text-warn';
+      const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/relogin`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: activeIg })
+      });
+      fb.textContent = res.message;
+      fb.className = res.ok ? 'text-ok' : 'text-err';
+      await refreshState();
+    }
+
+    async function resetDevice() {
+      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      const fb = document.getElementById('auth-feedback');
+      fb.textContent = 'Resetting device identity...';
+      fb.className = 'text-warn';
+      const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/reset_device`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: activeIg })
+      });
+      fb.textContent = res.message;
+      fb.className = res.ok ? 'text-ok' : 'text-warn';
+      await refreshState();
+    }
+
+    async function logoutSlot() {
+      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/logout`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: activeIg })
+      });
+      await refreshState();
+    }
+
+    async function removeSlot() {
+      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/remove`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: activeIg })
+      });
+      activeIg = '';
+      hydratedKey = '';
+      await loadUsers();
+    }
+
+    function downloadActiveSession() {
+      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      const a = document.createElement('a');
+      a.href = `/api/users/${encodeURIComponent(currentUser)}/accounts/${encodeURIComponent(activeIg)}/session`;
+      a.download = `${activeIg}_session.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    async function saveTelegram() {
+      const fb = document.getElementById('tg-feedback');
+      fb.textContent = 'Saving...';
+      try {
+        await api(`/api/users/${encodeURIComponent(currentUser)}/telegram`, {
+          method: 'POST',
+          body: JSON.stringify({
+            tg_chat_id: document.getElementById('tg-chat-id').value.trim(),
+            tg_admin_id: document.getElementById('tg-admin-id').value.trim(),
+            tg_token: document.getElementById('tg-token').value.trim()
+          })
+        });
+        fb.textContent = 'Saved Telegram settings.';
+        fb.className = 'text-ok';
+        await refreshState();
+      } catch (e) {
+        fb.textContent = e.message;
+        fb.className = 'text-err';
+      }
+    }
+
+    async function unlinkTopic(threadId) {
+      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/unlink_topic`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: activeIg, thread_id: threadId })
+      });
+      await refreshState();
+    }
+
+    async function quickCmd(cmd) {
+      document.getElementById('cmd-input').value = cmd;
+      await runBotCommand();
+    }
+
+    async function runBotCommand() {
+      const inp = document.getElementById('cmd-input');
+      const cmd = inp.value.trim();
+      if (!cmd || !currentUser) return;
+      inp.value = '';
+      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/command`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: activeIg, command: cmd })
+      });
+      await refreshState();
+    }
+
+    async function submitCode() {
+      const code = document.getElementById('code-input').value.trim();
+      if (!code || !activeIg || activeIg === '__NEW__') return;
+      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/code`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: activeIg, code })
+      });
+      document.getElementById('code-input').value = '';
+      await refreshState();
+    }
+
+    async function fetchLogs() {
+      if (!currentUser) return;
+      try {
+        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/logs?since=${lastLogId}`);
+        const inc = res.logs || [];
+        if (inc.length > 0) {
+          logs.push(...inc);
+          if (logs.length > 400) logs = logs.slice(-400);
+          lastLogId = logs[logs.length - 1].id;
+          renderLogs();
+        } else if (logs.length === 0) {
+          renderLogs();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function renderLogs() {
+      const box = document.getElementById('log-box');
+      if (logs.length === 0) {
+        box.innerHTML = '<div style="color: var(--text-muted);">No log output yet.</div>';
+        return;
+      }
+      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+      box.innerHTML = logs.map(l =>
+        `<div class="log-line"><span class="log-ts">${l.timestamp}</span><span class="log-lvl-${l.level}">${l.level}</span><span>${escapeHtml(l.message)}</span></div>`
+      ).join('');
+      if (atBottom) box.scrollTop = box.scrollHeight;
+    }
+
+    async function clearLogs() {
+      if (!currentUser) return;
+      await api(`/api/users/${encodeURIComponent(currentUser)}/logs/clear`, { method: 'POST', body: '{}' });
+      logs = [];
+      lastLogId = 0;
+      renderLogs();
+    }
+
+    function downloadLogs() {
+      if (!currentUser) return;
+      const txt = logs.map(l => `${l.timestamp} [${l.level}] ${l.message}`).join('\n');
+      const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${currentUser}_logs.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    document.getElementById('sidebar-user-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') openUserFromSidebar();
+    });
+    document.getElementById('welcome-user-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') openUserFromWelcome();
+    });
+    document.getElementById('cmd-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') runBotCommand();
+    });
+
+    loadUsers();
+    setInterval(() => {
+      if (currentUser) refreshState();
+    }, 3000);
+  </script>
+</body>
+</html>

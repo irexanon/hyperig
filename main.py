@@ -3,7 +3,7 @@ import json
 import os
 import signal
 import socket
-from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 # Pre-bind port 3000 immediately before heavy third-party imports (instagrapi, telegram)
@@ -27,7 +27,7 @@ from core.context import AppContext
 from core.instagram import InstagramClient
 from core.message_handler import MessageHandler
 from core.module_manager import ModuleManager
-from tg.bridge import TelegramBridge
+from tg.bridge import TelegramBridge, _TokenHub
 from utils.db import (
     ScopedStore,
     Store,
@@ -45,12 +45,21 @@ from utils.logger import (
 )
 
 log = get_logger("main")
+UI_HTML_PATH = Path(__file__).resolve().parent / "web" / "index.html"
 
 
 class InstagramSlot:
     """One Instagram account instance inside a User's workspace database."""
 
-    def __init__(self, user_id: str, ig_username: str, base_cfg: Config, store: Store, saved_cfg: dict):
+    def __init__(
+        self,
+        user_id: str,
+        ig_username: str,
+        base_cfg: Config,
+        store: Store,
+        saved_cfg: dict,
+        attached_to_bridge: bool = False,
+    ):
         self.user_id = user_id
         self.ig_username = ig_username
         self.base_cfg = base_cfg
@@ -61,6 +70,7 @@ class InstagramSlot:
 
         self.ig = InstagramClient(self.cfg, self.store)
         self.bridge = TelegramBridge(self.cfg, self.store, username=user_id)
+        self.bridge.attached = attached_to_bridge
         self.ctx = AppContext(cfg=self.cfg, ig=self.ig, store=self.store, bridge=self.bridge)
         self.modules = ModuleManager(self.ctx)
         self.ctx.modules = self.modules
@@ -71,6 +81,14 @@ class InstagramSlot:
         self.ig.realtime.on_typing = self.bridge.typing
         self._poller_task: asyncio.Task | None = None
         self.login_in_progress = False
+
+    @property
+    def attached_to_bridge(self) -> bool:
+        return self.bridge.attached
+
+    async def set_attached(self, attached: bool) -> None:
+        self.bridge.attached = attached
+        await self.bridge.reconfigure(self.cfg, self.ig, self.modules)
 
     async def start(self) -> None:
         tok = current_user_var.set(self.user_id)
@@ -296,6 +314,7 @@ class InstagramSlot:
 
         return {
             "ig_username": self.ig_username,
+            "attached_to_bridge": self.attached_to_bridge,
             "ig_logged_in": self.ig.logged_in,
             "login_in_progress": self.login_in_progress,
             "login_method": self.ig.auth.login_method,
@@ -340,7 +359,18 @@ class UserWorkspace:
         self.tg_token: str = ""
         self.slots: dict[str, InstagramSlot] = {}
         self.active_ig: str = ""
+        self.bridged_ig: str = ""
         self._lock = asyncio.Lock()
+
+    def get_attached_slot(self) -> InstagramSlot | None:
+        if self.bridged_ig and self.bridged_ig in self.slots:
+            return self.slots[self.bridged_ig]
+        return next(iter(self.slots.values()), None)
+
+    def get_active_slot(self) -> InstagramSlot | None:
+        if self.active_ig and self.active_ig in self.slots:
+            return self.slots[self.active_ig]
+        return next(iter(self.slots.values()), None)
 
     async def start(self) -> None:
         tok = current_user_var.set(self.username)
@@ -375,12 +405,14 @@ class UserWorkspace:
                             val = await self.store.get(key)
                             if val is not None:
                                 await scoped.set(key, val)
+                first_ig = accounts[0] if accounts else ""
                 profile = {
                     "tg_chat_id": tg_chat_id,
                     "tg_admin_id": tg_admin_id,
                     "tg_token": tg_token,
                     "accounts": accounts,
-                    "active_account": accounts[0] if accounts else "",
+                    "active_account": first_ig,
+                    "bridged_account": first_ig,
                 }
                 await self.store.set("profile", profile)
 
@@ -396,12 +428,18 @@ class UserWorkspace:
 
             account_names = [sanitize_username(a) for a in (profile.get("accounts") or []) if sanitize_username(a)]
             self.active_ig = sanitize_username(profile.get("active_account") or "")
+            self.bridged_ig = sanitize_username(profile.get("bridged_account") or self.active_ig or "")
+            if not self.bridged_ig and account_names:
+                self.bridged_ig = account_names[0]
+
             add_user_log(self.username, "INFO", "workspace", f"Loaded database for user '{self.username}'")
 
             for ig_u in account_names:
                 await self._init_slot(ig_u)
             if not self.active_ig and self.slots:
                 self.active_ig = next(iter(self.slots))
+            if not self.bridged_ig and self.slots:
+                self.bridged_ig = self.active_ig
         finally:
             current_user_var.reset(tok)
 
@@ -414,6 +452,7 @@ class UserWorkspace:
                 "tg_token": self.tg_token,
                 "accounts": list(self.slots.keys()),
                 "active_account": self.active_ig,
+                "bridged_account": self.bridged_ig,
             },
         )
 
@@ -428,7 +467,17 @@ class UserWorkspace:
             saved_cfg["tg_admin_id"] = self.tg_admin_id
         if self.tg_token:
             saved_cfg["tg_token"] = self.tg_token
-        slot = InstagramSlot(self.username, ig_username, self.base_cfg, scoped, saved_cfg)
+        if not self.bridged_ig:
+            self.bridged_ig = ig_username
+        is_attached = (ig_username == self.bridged_ig)
+        slot = InstagramSlot(
+            self.username,
+            ig_username,
+            self.base_cfg,
+            scoped,
+            saved_cfg,
+            attached_to_bridge=is_attached,
+        )
         await slot.start()
         self.slots[ig_username] = slot
         return slot
@@ -440,8 +489,30 @@ class UserWorkspace:
         async with self._lock:
             slot = await self._init_slot(ig_u)
             self.active_ig = ig_u
+            if not self.bridged_ig or self.bridged_ig not in self.slots:
+                self.bridged_ig = ig_u
+                await slot.set_attached(True)
             await self._save_profile()
             return slot
+
+    async def attach_account(self, raw_ig_username: str) -> InstagramSlot:
+        tok = current_user_var.set(self.username)
+        try:
+            slot = await self.ensure_slot(raw_ig_username)
+            self.bridged_ig = slot.ig_username
+            self.active_ig = slot.ig_username
+            for uname, s in self.slots.items():
+                await s.set_attached(uname == self.bridged_ig)
+            await self._save_profile()
+            add_user_log(
+                self.username,
+                "INFO",
+                "bridge",
+                f"Attached @{self.bridged_ig} to the Telegram bridge.",
+            )
+            return slot
+        finally:
+            current_user_var.reset(tok)
 
     async def remove_slot(self, raw_ig_username: str) -> None:
         ig_u = sanitize_username(raw_ig_username)
@@ -455,26 +526,33 @@ class UserWorkspace:
                 add_user_log(self.username, "INFO", "workspace", f"Removed Instagram account @{ig_u}")
             if self.active_ig == ig_u:
                 self.active_ig = next(iter(self.slots), "")
+            if self.bridged_ig == ig_u:
+                self.bridged_ig = self.active_ig
+                if self.bridged_ig and self.bridged_ig in self.slots:
+                    await self.slots[self.bridged_ig].set_attached(True)
             await self._save_profile()
 
     async def update_telegram(self, payload: dict) -> None:
         tok = current_user_var.set(self.username)
         try:
-            raw_chat = str(payload.get("tg_chat_id") or "").strip()
-            raw_admin = str(payload.get("tg_admin_id") or "").strip()
-            raw_token = str(payload.get("tg_token") or "").strip()
-            try:
-                self.tg_chat_id = int(raw_chat) if raw_chat else 0
-            except ValueError:
-                raise ValueError("Telegram Chat ID must be a number (e.g. -1001234567890).")
-            try:
-                self.tg_admin_id = int(raw_admin) if raw_admin else 0
-            except ValueError:
-                raise ValueError("Telegram Admin ID must be a numeric user ID.")
-            if raw_token == "__CLEAR__":
-                self.tg_token = ""
-            elif raw_token:
-                self.tg_token = raw_token
+            if "tg_chat_id" in payload:
+                raw_chat = str(payload.get("tg_chat_id") or "").strip()
+                try:
+                    self.tg_chat_id = int(raw_chat) if raw_chat else 0
+                except ValueError:
+                    raise ValueError("Telegram Chat ID must be a number (e.g. -1001234567890).")
+            if "tg_admin_id" in payload:
+                raw_admin = str(payload.get("tg_admin_id") or "").strip()
+                try:
+                    self.tg_admin_id = int(raw_admin) if raw_admin else 0
+                except ValueError:
+                    raise ValueError("Telegram Admin ID must be a numeric user ID.")
+            if "tg_token" in payload:
+                raw_token = str(payload.get("tg_token") or "").strip()
+                if raw_token == "__CLEAR__":
+                    self.tg_token = ""
+                elif raw_token:
+                    self.tg_token = raw_token
 
             await self._save_profile()
             for slot in self.slots.values():
@@ -482,16 +560,14 @@ class UserWorkspace:
                     "tg_chat_id": self.tg_chat_id,
                     "tg_admin_id": self.tg_admin_id,
                 }
-                if raw_token == "__CLEAR__":
-                    updates["tg_token"] = "__CLEAR__"
-                elif self.tg_token:
+                if self.tg_token:
                     updates["tg_token"] = self.tg_token
                 await slot.apply_config(updates)
             add_user_log(
                 self.username,
                 "INFO",
                 "telegram",
-                f"Updated Telegram routing (Chat ID={self.tg_chat_id or 'none'}, Admin ID={self.tg_admin_id or 'any'}).",
+                f"Updated Telegram routing (Group ID={self.tg_chat_id or 'none'}, Admin ID={self.tg_admin_id or 'none'}).",
             )
         finally:
             current_user_var.reset(tok)
@@ -507,7 +583,12 @@ class UserWorkspace:
         accounts = [await slot.to_dict() for slot in self.slots.values()]
         tg_running = any(a["tg_running"] for a in accounts)
         bot_uname = next((a["tg_bot_username"] for a in accounts if a["tg_bot_username"]), "")
-        tg_err = next((a["tg_error"] for a in accounts if a["tg_error"]), "")
+        if not bot_uname:
+            for hub in _TokenHub._hubs.values():
+                if hub.bot_username:
+                    bot_uname = hub.bot_username
+                    break
+        tg_err = next((a["tg_error"] for a in accounts if a["attached_to_bridge"] and a["tg_error"]), "")
         return {
             "username": self.username,
             "storage_backend": "MongoDB" if self.base_cfg.mongo_uri else f"data/users/{self.username}",
@@ -519,6 +600,7 @@ class UserWorkspace:
             "tg_bot_username": bot_uname,
             "tg_error": tg_err,
             "active_ig": self.active_ig,
+            "bridged_ig": self.bridged_ig,
             "accounts": accounts,
         }
 
@@ -532,6 +614,13 @@ class MultiUserManager:
         self._lock = asyncio.Lock()
 
     async def bootstrap_existing(self) -> None:
+        # Ensure the shared Telegram Bot starts immediately so users can send /start in private DM
+        if self.base_cfg.tg_token:
+            try:
+                await _TokenHub.ensure_Started(self.base_cfg.tg_token)
+            except Exception as e:
+                log.warning("Could not start default Telegram bot on boot: %s", e)
+
         names = list_registered_users(self.base_cfg)
         for name in names:
             try:
@@ -561,6 +650,7 @@ class MultiUserManager:
                     "username": uname,
                     "account_count": len(ws.slots),
                     "logged_in_count": logged_in_count,
+                    "bridged_ig": ws.bridged_ig,
                     "tg_chat_id": ws.tg_chat_id or "",
                 }
             )
@@ -572,1224 +662,6 @@ class MultiUserManager:
                 await ws.stop()
             except Exception:
                 pass
-
-
-DASHBOARD_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hyper Insta Bridge</title>
-  <meta name="description" content="Bridges Instagram Direct Messages to Telegram forum topics using instagrapi, MQTT/FBNS realtime delivery, and python-telegram-bot." />
-  <meta property="og:title" content="Hyper Insta Bridge" />
-  <meta property="og:description" content="Bridges Instagram Direct Messages to Telegram forum topics using instagrapi, MQTT/FBNS realtime delivery, and python-telegram-bot." />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg: #090B10;
-      --surface: #10141D;
-      --surface-elevated: #161B26;
-      --input: #0B0E15;
-      --border: rgba(255, 255, 255, 0.08);
-      --border-strong: rgba(255, 255, 255, 0.14);
-      --border-focus: #38BDF8;
-      --text: #F3F4F6;
-      --text-secondary: #9CA3AF;
-      --text-dim: #64748B;
-      --accent: #0EA5E9;
-      --accent-hover: #0284C7;
-      --ok: #10B981;
-      --warn: #F59E0B;
-      --err: #EF4444;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-      font-size: 13.5px;
-      line-height: 1.5;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      -webkit-font-smoothing: antialiased;
-    }
-    .mono {
-      font-family: 'JetBrains Mono', monospace;
-      font-variant-numeric: tabular-nums;
-    }
-
-    /* Top Bar Contract: 3 zones */
-    header.topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 32px;
-      padding: 13px 28px;
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-    }
-    .brand {
-      font-weight: 700;
-      font-size: 16px;
-      color: var(--text);
-      text-decoration: none;
-      letter-spacing: -0.02em;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-    nav.view-nav {
-      display: flex;
-      align-items: center;
-      gap: 24px;
-    }
-    nav.view-nav a {
-      color: var(--text-secondary);
-      text-decoration: none;
-      font-size: 13px;
-      font-weight: 500;
-      white-space: nowrap;
-      padding: 4px 0;
-      border-bottom: 2px solid transparent;
-      transition: color 150ms ease, border-color 150ms ease;
-    }
-    nav.view-nav a:hover, nav.view-nav a.active {
-      color: var(--text);
-      border-bottom-color: var(--accent);
-    }
-
-    /* App Layout */
-    .shell {
-      display: grid;
-      grid-template-columns: 265px 1fr;
-      flex: 1;
-      max-width: 1440px;
-      width: 100%;
-      margin: 0 auto;
-    }
-    aside.sidebar {
-      background: var(--surface);
-      border-right: 1px solid var(--border);
-      padding: 20px 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 22px;
-    }
-    main.content {
-      padding: 24px 28px 40px;
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
-      overflow-y: auto;
-    }
-    @media (max-width: 960px) {
-      .shell { grid-template-columns: 1fr; }
-      aside.sidebar { border-right: none; border-bottom: 1px solid var(--border); }
-      nav.view-nav { display: none; }
-    }
-
-    /* Controls */
-    .label-title {
-      font-size: 11.5px;
-      font-weight: 600;
-      color: var(--text-secondary);
-      margin-bottom: 8px;
-    }
-    label {
-      display: flex;
-      justify-content: space-between;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-secondary);
-      margin-bottom: 5px;
-    }
-    input[type="text"], input[type="password"], input[type="number"], textarea, select {
-      width: 100%;
-      background: var(--input);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 8.5px 11px;
-      border-radius: 6px;
-      font-size: 13px;
-      font-family: inherit;
-      outline: none;
-      transition: border-color 150ms ease;
-    }
-    input:focus, textarea:focus, select:focus {
-      border-color: var(--border-focus);
-    }
-    button {
-      background: var(--surface-elevated);
-      color: var(--text);
-      border: 1px solid var(--border-strong);
-      padding: 8px 14px;
-      border-radius: 6px;
-      font-size: 12.5px;
-      font-weight: 600;
-      font-family: inherit;
-      cursor: pointer;
-      white-space: nowrap;
-      flex-shrink: 0;
-      transition: background 150ms ease, opacity 150ms ease;
-    }
-    button:hover:not(:disabled) {
-      background: #1F2637;
-    }
-    button:disabled {
-      opacity: 0.42;
-      cursor: not-allowed;
-    }
-    button.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #06090F;
-    }
-    button.primary:hover:not(:disabled) {
-      background: var(--accent-hover);
-      color: #fff;
-    }
-    button.danger {
-      background: transparent;
-      color: var(--err);
-      border-color: rgba(239, 68, 68, 0.35);
-    }
-
-    /* Sidebar Lists */
-    .item-list {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-    .item-btn {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      width: 100%;
-      text-align: left;
-      padding: 8px 10px;
-      border-radius: 6px;
-      background: transparent;
-      border: 1px solid transparent;
-      color: var(--text-secondary);
-      font-weight: 500;
-      font-size: 13px;
-    }
-    .item-btn:hover {
-      background: rgba(255, 255, 255, 0.03);
-      color: var(--text);
-    }
-    .item-btn.active {
-      background: rgba(14, 165, 233, 0.12);
-      border-color: rgba(14, 165, 233, 0.4);
-      color: var(--text);
-    }
-
-    /* Panels */
-    .panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 20px 22px;
-    }
-    .panel-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding-bottom: 14px;
-      margin-bottom: 16px;
-      border-bottom: 1px solid var(--border);
-      flex-wrap: wrap;
-    }
-    .panel-title {
-      margin: 0;
-      font-size: 15px;
-      font-weight: 600;
-    }
-    .meta-row {
-      font-size: 12px;
-      color: var(--text-secondary);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .grid-2 {
-      display: grid;
-      grid-template-columns: 1.15fr 0.85fr;
-      gap: 20px;
-      align-items: start;
-    }
-    .grid-equal {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
-      align-items: start;
-    }
-    @media (max-width: 1080px) {
-      .grid-2, .grid-equal { grid-template-columns: 1fr; }
-    }
-    .form-row-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-    .field { margin-bottom: 12px; }
-
-    /* Segmented Tabs */
-    .segmented {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      background: var(--input);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 3px;
-      margin-bottom: 16px;
-    }
-    .segmented button {
-      border: none;
-      background: transparent;
-      color: var(--text-secondary);
-      padding: 6px 10px;
-      border-radius: 4px;
-      font-size: 12px;
-    }
-    .segmented button.active {
-      background: var(--surface-elevated);
-      color: var(--text);
-    }
-
-    /* Two Switches */
-    .switch-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 12px 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .switch-row:last-of-type { border-bottom: none; }
-    input[type="checkbox"].switch {
-      width: 38px;
-      height: 20px;
-      appearance: none;
-      background: #273042;
-      border-radius: 12px;
-      position: relative;
-      cursor: pointer;
-      transition: background 150ms ease;
-      flex-shrink: 0;
-    }
-    input[type="checkbox"].switch::after {
-      content: "";
-      position: absolute;
-      top: 2px;
-      left: 2px;
-      width: 16px;
-      height: 16px;
-      background: #fff;
-      border-radius: 50%;
-      transition: transform 150ms ease;
-    }
-    input[type="checkbox"].switch:checked { background: var(--accent); }
-    input[type="checkbox"].switch:checked::after { transform: translateX(18px); }
-
-    /* Collapsible Details */
-    details.adv-box {
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      background: var(--input);
-      padding: 8px 12px;
-      margin-bottom: 12px;
-    }
-    details.adv-box summary {
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-secondary);
-      user-select: none;
-    }
-
-    /* Simple Live Logs */
-    .log-box {
-      background: var(--input);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      height: 240px;
-      overflow-y: auto;
-      padding: 12px 14px;
-      font-size: 12px;
-      line-height: 1.6;
-    }
-    .log-line {
-      white-space: pre-wrap;
-      word-break: break-word;
-      padding: 1.5px 0;
-    }
-    .log-ts { color: var(--text-dim); margin-right: 8px; }
-    .log-lvl-INFO { color: #38BDF8; margin-right: 6px; }
-    .log-lvl-WARNING { color: var(--warn); margin-right: 6px; }
-    .log-lvl-ERROR { color: var(--err); font-weight: 600; margin-right: 6px; }
-
-    .text-ok { color: var(--ok); }
-    .text-warn { color: var(--warn); }
-    .text-err { color: var(--err); }
-  </style>
-</head>
-<body>
-  <!-- Top Bar: 3 zones -->
-  <header class="topbar">
-    <a href="#" class="brand">Hyper Insta Bridge</a>
-    <nav class="view-nav">
-      <a href="#sec-accounts" class="active">Instagram Accounts</a>
-      <a href="#sec-telegram">Telegram &amp; Topics</a>
-      <a href="#sec-session">Session &amp; Device</a>
-      <a href="#sec-logs">Live Logs</a>
-    </nav>
-    <div>
-      <button class="primary" id="btn-top-download" onclick="downloadActiveSession()" disabled>Download Session JSON</button>
-    </div>
-  </header>
-
-  <div class="shell">
-    <!-- Sidebar: 1) User Profile DB (no password) + 2) Multiple Instagram Accounts inside that User DB -->
-    <aside class="sidebar">
-      <div>
-        <div class="label-title">User Database (No Password)</div>
-        <div style="display: flex; gap: 6px; margin-bottom: 8px;">
-          <input type="text" id="user-input" class="mono" placeholder="Enter username..." />
-          <button class="primary" onclick="openUserFromSidebar()">Open</button>
-        </div>
-        <div id="user-list" class="item-list"></div>
-      </div>
-
-      <div id="sidebar-ig-section" style="display: none; flex: 1; flex-direction: column;">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-          <span class="label-title" style="margin: 0;">Instagram Accounts</span>
-          <button onclick="selectIgAccount('__NEW__')" style="padding: 3px 8px; font-size: 11px;">+ Add IG</button>
-        </div>
-        <div id="ig-account-list" class="item-list"></div>
-      </div>
-
-      <div style="border-top: 1px solid var(--border); padding-top: 12px; font-size: 12px; color: var(--text-secondary);">
-        <div>User DB: <strong id="meta-active-user" class="mono">None</strong></div>
-        <div id="meta-storage-path" class="mono" style="font-size: 11px; color: var(--text-dim); margin-top: 2px;"></div>
-      </div>
-    </aside>
-
-    <!-- Main Content -->
-    <main class="content">
-      <!-- Welcome / Empty State -->
-      <div id="empty-state" class="panel" style="text-align: center; padding: 52px 24px;">
-        <h2 style="margin: 0 0 8px 0; font-size: 19px;">Enter Your Username to Open Your Database</h2>
-        <p style="color: var(--text-secondary); max-width: 480px; margin: 0 auto 20px;">
-          No registration password needed. Your username creates an isolated database where you can add multiple Instagram accounts, link your Telegram Forum Chat ID, download/import sessions, and monitor live logs.
-        </p>
-        <div style="display: flex; gap: 8px; max-width: 340px; margin: 0 auto;">
-          <input type="text" id="hero-user-input" class="mono" placeholder="e.g. arshman" />
-          <button class="primary" onclick="openUserFromHero()">Open User DB</button>
-        </div>
-      </div>
-
-      <!-- Active User Workspace -->
-      <div id="user-workspace" style="display: none; flex-direction: column; gap: 20px;">
-
-        <!-- 2FA / Challenge Code Banner (Appears automatically when Instagram requests a verification code) -->
-        <div id="code-banner" style="display: none; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 14px 18px; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
-          <div>
-            <div style="font-weight: 600; color: var(--warn);">Verification / 2FA Code Requested by Instagram</div>
-            <div id="code-hint" style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;"></div>
-          </div>
-          <div style="display: flex; gap: 8px;">
-            <input type="text" id="code-input" class="mono" placeholder="Enter 6 or 8 digit code" style="width: 170px;" />
-            <button class="primary" onclick="submitCode()">Submit Code</button>
-          </div>
-        </div>
-
-        <!-- Row 1: Instagram Account Login + Realtime & FBNS Control -->
-        <section id="sec-accounts" class="grid-2">
-          <!-- Left: Instagram Account Login (Password / Cookie / Session JSON Import) -->
-          <div class="panel">
-            <div class="panel-head">
-              <h2 class="panel-title" id="login-panel-title">Instagram Account Login</h2>
-              <div class="meta-row">
-                <span id="slot-status-text" class="text-warn">Not logged in</span>
-              </div>
-            </div>
-
-            <div class="segmented">
-              <button id="tab-pw" class="active" onclick="setAuthTab('password')">Password Login</button>
-              <button id="tab-ck" onclick="setAuthTab('cookie')">Cookie Login</button>
-              <button id="tab-js" onclick="setAuthTab('json')">Import Session JSON</button>
-            </div>
-
-            <div class="field">
-              <label>Instagram Username</label>
-              <input type="text" id="ig-username" class="mono" placeholder="instagram_handle" />
-            </div>
-
-            <!-- Mode 1: Password -->
-            <div id="pane-password">
-              <div class="form-row-2">
-                <div class="field">
-                  <label>Instagram Password <span id="pw-saved-tag" class="text-ok"></span></label>
-                  <input type="password" id="ig-password" placeholder="Enter password" />
-                </div>
-                <div class="field">
-                  <label>HTTP / SOCKS5 Proxy (Optional)</label>
-                  <input type="text" id="ig-proxy" class="mono" placeholder="http://user:pass@host:port" />
-                </div>
-              </div>
-
-              <details class="adv-box">
-                <summary>2FA TOTP Secret &amp; Device Region (Optional)</summary>
-                <div class="form-row-2" style="margin-top: 10px;">
-                  <div class="field">
-                    <label>2FA TOTP Secret (Base32) <span id="totp-saved-tag" class="text-ok"></span></label>
-                    <input type="password" id="ig-totp" class="mono" placeholder="Auto-fills 2FA codes" />
-                  </div>
-                  <div class="field">
-                    <label>Phone Number (Challenge)</label>
-                    <input type="text" id="ig-phone" class="mono" placeholder="+1..." />
-                  </div>
-                </div>
-                <div class="form-row-2">
-                  <div class="field" style="margin-bottom: 0;">
-                    <label>Locale &amp; Country</label>
-                    <div style="display: flex; gap: 6px;">
-                      <input type="text" id="ig-locale" class="mono" placeholder="en_US" />
-                      <input type="text" id="ig-country" class="mono" placeholder="US" style="width: 75px;" />
-                    </div>
-                  </div>
-                  <div class="field" style="margin-bottom: 0;">
-                    <label>Timezone Offset (Sec)</label>
-                    <input type="number" id="ig-tz" class="mono" placeholder="e.g. 18000" />
-                  </div>
-                </div>
-              </details>
-
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; flex-wrap: wrap;">
-                <span style="font-size: 12px; color: var(--text-dim);">Auto-enables Realtime &amp; FBNS</span>
-                <div style="display: flex; gap: 8px;">
-                  <button onclick="reloginSlot()" id="btn-relogin" disabled>Relogin</button>
-                  <button class="primary" id="btn-pw-login" onclick="loginPassword()">Login with Password</button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Mode 2: Cookie -->
-            <div id="pane-cookie" style="display: none;">
-              <div class="field">
-                <label>Browser Cookie (sessionid value, Cookie header, or JSON cookie array)</label>
-                <textarea id="ig-cookie" class="mono" rows="3" placeholder="123456789%3AAbCdEf..."></textarea>
-              </div>
-              <div class="field">
-                <label>HTTP / SOCKS5 Proxy (Optional)</label>
-                <input type="text" id="ig-cookie-proxy" class="mono" placeholder="http://user:pass@host:port" />
-              </div>
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px;">
-                <span style="font-size: 12px; color: var(--text-dim);">Auto-disables Realtime &amp; FBNS</span>
-                <button class="primary" id="btn-ck-login" onclick="loginCookie()">Login with Cookie</button>
-              </div>
-            </div>
-
-            <!-- Mode 3: Session JSON Import -->
-            <div id="pane-json" style="display: none;">
-              <div class="field">
-                <label>Paste instagrapi Session JSON or Upload File</label>
-                <textarea id="ig-session-json" class="mono" rows="3" placeholder='{"uuids": {...}, "authorization_data": {...}}'></textarea>
-              </div>
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
-                <input type="file" accept=".json,application/json" onchange="loadJsonFile(event)" style="font-size: 12px; max-width: 220px;" />
-                <button class="primary" onclick="importSession()">Import &amp; Verify Session</button>
-              </div>
-            </div>
-
-            <div id="auth-feedback" style="font-size: 12px; margin-top: 10px; min-height: 18px;"></div>
-          </div>
-
-          <!-- Right: Selected Instagram Account Controls (Realtime & FBNS + Session Actions) -->
-          <div class="panel">
-            <div class="panel-head">
-              <div>
-                <h2 class="panel-title mono" id="right-ig-title">@account</h2>
-                <div class="meta-row" id="right-ig-meta" style="margin-top: 3px;">Select or login an account</div>
-              </div>
-              <button onclick="downloadActiveSession()" id="btn-card-download" disabled>Download Session</button>
-            </div>
-
-            <!-- Only the 2 requested toggles: Realtime and FBNS -->
-            <div class="switch-row">
-              <div>
-                <div style="font-weight: 600; font-size: 13.5px;">Realtime MQTT</div>
-                <div style="font-size: 12px; color: var(--text-secondary);" id="rt-desc">Live DM &amp; typing stream (auto-ON for password)</div>
-              </div>
-              <input type="checkbox" class="switch" id="sw-realtime" onchange="toggleRealtime('realtime', this.checked)" disabled />
-            </div>
-
-            <div class="switch-row">
-              <div>
-                <div style="font-weight: 600; font-size: 13.5px;">FBNS Push</div>
-                <div style="font-size: 12px; color: var(--text-secondary);" id="fbns-desc">Background push notifications (auto-ON for password)</div>
-              </div>
-              <input type="checkbox" class="switch" id="sw-fbns" onchange="toggleRealtime('fbns', this.checked)" disabled />
-            </div>
-
-            <div id="sec-session" style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
-              <div class="label-title">Session &amp; Device Info</div>
-              <pre id="device-info-pre" class="mono" style="background: var(--input); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; font-size: 11.5px; color: var(--text-secondary); margin: 0 0 14px 0; white-space: pre-wrap;">No active session</pre>
-              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                <button id="btn-reset-device" onclick="resetDevice()" disabled>Reset Device UUID</button>
-                <button id="btn-logout-slot" onclick="logoutSlot()" disabled>Logout</button>
-                <button id="btn-remove-slot" class="danger" onclick="removeSlot()" style="margin-left: auto;" disabled>Remove Account</button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Row 2: Telegram Forum Group Config + Bridged Topics & Bot Commands -->
-        <section id="sec-telegram" class="grid-equal">
-          <div class="panel">
-            <div class="panel-head">
-              <h2 class="panel-title">Telegram Forum Group Bridge</h2>
-              <div class="meta-row">
-                <span id="tg-conn-label" class="text-warn">Not connected</span>
-              </div>
-            </div>
-
-            <div class="form-row-2">
-              <div class="field">
-                <label>Telegram Forum Chat ID</label>
-                <input type="text" id="tg-chat-id" class="mono" placeholder="-1001234567890" />
-              </div>
-              <div class="field">
-                <label>Admin User ID (Optional)</label>
-                <input type="text" id="tg-admin-id" class="mono" placeholder="Numeric user ID" />
-              </div>
-            </div>
-
-            <div class="field">
-              <label>Custom Bot Token (Optional — leave blank to use default bot)</label>
-              <input type="password" id="tg-token" class="mono" placeholder="Uses server bot token if empty" />
-            </div>
-
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px;">
-              <span id="tg-feedback" style="font-size: 12px; color: var(--text-secondary);"></span>
-              <button class="primary" onclick="saveTelegram()">Save Telegram Settings</button>
-            </div>
-          </div>
-
-          <div class="panel">
-            <div class="panel-head">
-              <h2 class="panel-title">Bridged Topics &amp; Bot Commands</h2>
-              <div class="meta-row">
-                <span id="topics-count-label" class="mono">0 linked topics</span>
-              </div>
-            </div>
-
-            <div style="display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;">
-              <input type="text" id="cmd-input" class="mono" placeholder="Run command (/status, /session, /ping, /help)" style="flex: 1;" />
-              <button class="primary" onclick="runBotCommand()">Run</button>
-              <button onclick="quickCmd('/status')">/status</button>
-              <button onclick="quickCmd('/ping')">/ping</button>
-            </div>
-
-            <div id="topics-list" style="background: var(--input); border: 1px solid var(--border); border-radius: 6px; max-height: 135px; overflow-y: auto; padding: 8px 12px; font-size: 12px;"></div>
-          </div>
-        </section>
-
-        <!-- Row 3: Simple Live Logs (No filter clutter) -->
-        <section id="sec-logs" class="panel">
-          <div class="panel-head" style="margin-bottom: 12px; padding-bottom: 10px;">
-            <h2 class="panel-title">Live Logs</h2>
-            <div style="display: flex; gap: 8px;">
-              <button onclick="downloadLogs()" style="padding: 5px 10px; font-size: 12px;">Download</button>
-              <button onclick="clearLogs()" style="padding: 5px 10px; font-size: 12px;">Clear</button>
-            </div>
-          </div>
-          <div id="log-box" class="log-box mono"></div>
-        </section>
-
-      </div>
-    </main>
-  </div>
-
-  <script>
-    let currentUser = localStorage.getItem('hib_active_user') || '';
-    let activeIg = '';
-    let authTab = 'password';
-    let lastLogId = 0;
-    let logs = [];
-    let hydratedKey = '';
-
-    async function api(path, options = {}) {
-      const res = await fetch(path, {
-        headers: { 'Content-Type': 'application/json' },
-        ...options
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
-      return data;
-    }
-
-    function setAuthTab(tab) {
-      authTab = tab;
-      document.getElementById('tab-pw').className = tab === 'password' ? 'active' : '';
-      document.getElementById('tab-ck').className = tab === 'cookie' ? 'active' : '';
-      document.getElementById('tab-js').className = tab === 'json' ? 'active' : '';
-      document.getElementById('pane-password').style.display = tab === 'password' ? 'block' : 'none';
-      document.getElementById('pane-cookie').style.display = tab === 'cookie' ? 'block' : 'none';
-      document.getElementById('pane-json').style.display = tab === 'json' ? 'block' : 'none';
-    }
-
-    async function loadUsers() {
-      try {
-        const data = await api('/api/users');
-        const users = data.users || [];
-        const userListEl = document.getElementById('user-list');
-
-        if (!currentUser && users.length > 0) {
-          currentUser = users[0].username;
-          localStorage.setItem('hib_active_user', currentUser);
-        }
-
-        userListEl.innerHTML = users.map(u => {
-          const isAct = u.username === currentUser;
-          return `
-            <button class="item-btn ${isAct ? 'active' : ''}" onclick="switchUser('${u.username}')">
-              <span class="mono">${u.username}</span>
-              <span style="font-size: 11px; color: var(--text-dim);">${u.logged_in_count}/${u.account_count} IG</span>
-            </button>
-          `;
-        }).join('');
-
-        if (currentUser) {
-          document.getElementById('empty-state').style.display = 'none';
-          document.getElementById('user-workspace').style.display = 'flex';
-          document.getElementById('sidebar-ig-section').style.display = 'flex';
-          await refreshState();
-        } else {
-          document.getElementById('empty-state').style.display = 'block';
-          document.getElementById('user-workspace').style.display = 'none';
-          document.getElementById('sidebar-ig-section').style.display = 'none';
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    async function openUser(raw) {
-      const clean = (raw || '').trim();
-      if (!clean) return;
-      const res = await api('/api/users', {
-        method: 'POST',
-        body: JSON.stringify({ username: clean })
-      });
-      currentUser = res.username;
-      localStorage.setItem('hib_active_user', currentUser);
-      activeIg = res.state.active_ig || '';
-      logs = [];
-      lastLogId = 0;
-      hydratedKey = '';
-      await loadUsers();
-    }
-
-    function openUserFromSidebar() {
-      const inp = document.getElementById('user-input');
-      openUser(inp.value);
-      inp.value = '';
-    }
-
-    function openUserFromHero() {
-      const inp = document.getElementById('hero-user-input');
-      openUser(inp.value);
-    }
-
-    async function switchUser(uname) {
-      currentUser = uname;
-      localStorage.setItem('hib_active_user', currentUser);
-      activeIg = '';
-      logs = [];
-      lastLogId = 0;
-      hydratedKey = '';
-      await loadUsers();
-    }
-
-    function selectIgAccount(igName) {
-      activeIg = igName;
-      hydratedKey = '';
-      document.getElementById('auth-feedback').textContent = '';
-      if (igName === '__NEW__') {
-        document.getElementById('ig-username').value = '';
-        document.getElementById('ig-password').value = '';
-        document.getElementById('ig-cookie').value = '';
-        document.getElementById('ig-proxy').value = '';
-        document.getElementById('ig-cookie-proxy').value = '';
-      }
-      refreshState();
-    }
-
-    async function refreshState() {
-      if (!currentUser) return;
-      try {
-        const st = await api(`/api/users/${encodeURIComponent(currentUser)}/state`);
-        document.getElementById('meta-active-user').textContent = st.username;
-        document.getElementById('meta-storage-path').textContent = st.storage_backend;
-
-        const accounts = st.accounts || [];
-        if (!activeIg) {
-          activeIg = st.active_ig || (accounts[0] ? accounts[0].ig_username : '__NEW__');
-        }
-        if (activeIg !== '__NEW__' && !accounts.some(a => a.ig_username === activeIg)) {
-          activeIg = accounts[0] ? accounts[0].ig_username : '__NEW__';
-        }
-
-        // Sidebar Instagram accounts list
-        const igListEl = document.getElementById('ig-account-list');
-        if (accounts.length === 0) {
-          igListEl.innerHTML = '<div style="font-size: 12px; color: var(--text-dim); padding: 4px 0;">No Instagram accounts added yet.</div>';
-        } else {
-          igListEl.innerHTML = accounts.map(a => {
-            const isAct = a.ig_username === activeIg;
-            const stTxt = a.ig_logged_in ? 'Online' : 'Offline';
-            const stCls = a.ig_logged_in ? 'text-ok' : 'text-warn';
-            return `
-              <button class="item-btn ${isAct ? 'active' : ''}" onclick="selectIgAccount('${a.ig_username}')">
-                <span class="mono">@${a.ig_username}</span>
-                <span class="${stCls}" style="font-size: 11px;">${stTxt}</span>
-              </button>
-            `;
-          }).join('');
-        }
-
-        // Telegram section
-        const tgLabel = document.getElementById('tg-conn-label');
-        if (st.tg_running) {
-          tgLabel.textContent = `Connected${st.tg_bot_username ? ' (@' + st.tg_bot_username + ')' : ''}`;
-          tgLabel.className = 'text-ok';
-        } else if (st.tg_chat_id) {
-          tgLabel.textContent = st.tg_error || `Chat ID ${st.tg_chat_id} saved`;
-          tgLabel.className = 'text-warn';
-        } else {
-          tgLabel.textContent = 'Enter Telegram Forum Chat ID';
-          tgLabel.className = 'text-warn';
-        }
-
-        const slot = accounts.find(a => a.ig_username === activeIg) || null;
-        const hKey = `${currentUser}:${activeIg}`;
-        if (hydratedKey !== hKey) {
-          hydratedKey = hKey;
-          document.getElementById('tg-chat-id').value = st.tg_chat_id || '';
-          document.getElementById('tg-admin-id').value = st.tg_admin_id || '';
-          document.getElementById('tg-token').value = '';
-          document.getElementById('ig-username').value = slot ? slot.ig_username : '';
-          document.getElementById('ig-password').value = '';
-          document.getElementById('ig-proxy').value = slot ? slot.proxy : '';
-          document.getElementById('ig-cookie-proxy').value = slot ? slot.proxy : '';
-          document.getElementById('ig-phone').value = slot ? slot.phone_number : '';
-          document.getElementById('ig-locale').value = slot ? slot.locale : 'en_US';
-          document.getElementById('ig-country').value = slot ? slot.country : 'US';
-          document.getElementById('ig-tz').value = slot ? slot.timezone_offset : '';
-        }
-
-        const codeBanner = document.getElementById('code-banner');
-        if (slot && slot.waiting_for_code) {
-          codeBanner.style.display = 'flex';
-          document.getElementById('code-hint').textContent = slot.code_hint || 'Enter the verification code sent by Instagram.';
-        } else {
-          codeBanner.style.display = 'none';
-        }
-
-        if (slot) {
-          document.getElementById('login-panel-title').textContent = `Manage @${slot.ig_username}`;
-          const stText = document.getElementById('slot-status-text');
-          stText.textContent = slot.ig_logged_in
-            ? `Logged In (${slot.login_method})`
-            : (slot.login_in_progress ? 'Logging in...' : 'Logged Out');
-          stText.className = slot.ig_logged_in ? 'text-ok' : 'text-warn';
-
-          document.getElementById('pw-saved-tag').textContent = slot.has_password ? '(Saved)' : '';
-          document.getElementById('totp-saved-tag').textContent = slot.has_totp ? '(Saved)' : '';
-
-          document.getElementById('right-ig-title').textContent = '@' + slot.ig_username;
-          document.getElementById('right-ig-meta').textContent =
-            `${slot.linked_topics} topics · ${slot.forwarded} DMs forwarded`;
-
-          const swRt = document.getElementById('sw-realtime');
-          const swFb = document.getElementById('sw-fbns');
-          swRt.disabled = false;
-          swFb.disabled = false;
-          swRt.checked = Boolean(slot.realtime);
-          swFb.checked = Boolean(slot.fbns);
-
-          document.getElementById('rt-desc').textContent = slot.realtime
-            ? (slot.rt_connected ? `Connected (${slot.rt_events} events)` : (slot.rt_error || 'Enabled · standby'))
-            : 'Disabled (polling mode)';
-          document.getElementById('fbns-desc').textContent = slot.fbns
-            ? (slot.fbns_connected ? `Connected (${slot.fbns_pushes} pushes)` : (slot.fbns_error || 'Enabled · standby'))
-            : 'Disabled';
-
-          document.getElementById('device-info-pre').textContent = slot.session_info;
-
-          const canDl = slot.ig_logged_in || slot.has_saved_session;
-          document.getElementById('btn-top-download').disabled = !canDl;
-          document.getElementById('btn-card-download').disabled = !canDl;
-          document.getElementById('btn-relogin').disabled = !canDl;
-          document.getElementById('btn-reset-device').disabled = false;
-          document.getElementById('btn-logout-slot').disabled = !slot.ig_logged_in;
-          document.getElementById('btn-remove-slot').disabled = false;
-
-          // Topics list
-          document.getElementById('topics-count-label').textContent = `${slot.linked_topics} linked topics`;
-          const tBox = document.getElementById('topics-list');
-          if (!slot.topics || slot.topics.length === 0) {
-            tBox.innerHTML = '<div style="color: var(--text-dim);">No forum topics created yet for this account.</div>';
-          } else {
-            tBox.innerHTML = slot.topics.map(t => `
-              <div style="display: flex; align-items: center; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--border);">
-                <span class="mono">${escapeHtml(t.title)} <span style="color: var(--text-dim);">→ Topic #${t.topic_id}</span></span>
-                <button onclick="unlinkTopic('${t.thread_id}')" style="padding: 2px 8px; font-size: 11px;">Unlink</button>
-              </div>
-            `).join('');
-          }
-        } else {
-          document.getElementById('login-panel-title').textContent = 'Add Instagram Account';
-          const stText = document.getElementById('slot-status-text');
-          stText.textContent = 'New Account';
-          stText.className = 'text-warn';
-          document.getElementById('right-ig-title').textContent = 'New Account';
-          document.getElementById('right-ig-meta').textContent = 'Sign in on the left to create this account slot';
-          document.getElementById('device-info-pre').textContent = 'No session loaded yet.';
-          document.getElementById('sw-realtime').disabled = true;
-          document.getElementById('sw-fbns').disabled = true;
-          document.getElementById('sw-realtime').checked = true;
-          document.getElementById('sw-fbns').checked = true;
-          document.getElementById('btn-top-download').disabled = true;
-          document.getElementById('btn-card-download').disabled = true;
-          document.getElementById('btn-relogin').disabled = true;
-          document.getElementById('btn-reset-device').disabled = true;
-          document.getElementById('btn-logout-slot').disabled = true;
-          document.getElementById('btn-remove-slot').disabled = true;
-          document.getElementById('topics-count-label').textContent = '0 linked topics';
-          document.getElementById('topics-list').innerHTML = '<div style="color: var(--text-dim);">Log in to view linked Telegram topics.</div>';
-        }
-
-        await fetchLogs();
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    async function loginPassword() {
-      const igUser = document.getElementById('ig-username').value.trim();
-      const fb = document.getElementById('auth-feedback');
-      const btn = document.getElementById('btn-pw-login');
-      if (!igUser) {
-        fb.textContent = 'Enter the Instagram username first.';
-        fb.className = 'text-warn';
-        return;
-      }
-      btn.disabled = true;
-      fb.textContent = 'Logging in with password (Realtime & FBNS auto-enabled)...';
-      fb.className = 'text-warn';
-      try {
-        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/login`, {
-          method: 'POST',
-          body: JSON.stringify({
-            ig_username: igUser,
-            password: document.getElementById('ig-password').value,
-            proxy: document.getElementById('ig-proxy').value.trim(),
-            totp_secret: document.getElementById('ig-totp').value.trim(),
-            phone_number: document.getElementById('ig-phone').value.trim(),
-            locale: document.getElementById('ig-locale').value.trim(),
-            country: document.getElementById('ig-country').value.trim(),
-            timezone_offset: document.getElementById('ig-tz').value.trim()
-          })
-        });
-        activeIg = res.ig_username || igUser;
-        hydratedKey = `${currentUser}:${activeIg}`;
-        fb.textContent = res.message;
-        fb.className = res.ok ? 'text-ok' : 'text-err';
-        await loadUsers();
-      } catch (e) {
-        fb.textContent = e.message;
-        fb.className = 'text-err';
-      } finally {
-        btn.disabled = false;
-      }
-    }
-
-    async function loginCookie() {
-      const igUser = document.getElementById('ig-username').value.trim();
-      const cookie = document.getElementById('ig-cookie').value.trim();
-      const proxy = document.getElementById('ig-cookie-proxy').value.trim();
-      const fb = document.getElementById('auth-feedback');
-      const btn = document.getElementById('btn-ck-login');
-      if (!igUser || !cookie) {
-        fb.textContent = 'Enter both the Instagram username and cookie.';
-        fb.className = 'text-warn';
-        return;
-      }
-      btn.disabled = true;
-      fb.textContent = 'Logging in with cookie (Realtime & FBNS auto-disabled)...';
-      fb.className = 'text-warn';
-      try {
-        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/cookie`, {
-          method: 'POST',
-          body: JSON.stringify({ ig_username: igUser, cookie, proxy })
-        });
-        activeIg = res.ig_username || igUser;
-        hydratedKey = `${currentUser}:${activeIg}`;
-        fb.textContent = res.message;
-        fb.className = res.ok ? 'text-ok' : 'text-err';
-        if (res.ok) document.getElementById('ig-cookie').value = '';
-        await loadUsers();
-      } catch (e) {
-        fb.textContent = e.message;
-        fb.className = 'text-err';
-      } finally {
-        btn.disabled = false;
-      }
-    }
-
-    function loadJsonFile(ev) {
-      const f = ev.target.files && ev.target.files[0];
-      if (!f) return;
-      const r = new FileReader();
-      r.onload = () => { document.getElementById('ig-session-json').value = r.result; };
-      r.readAsText(f);
-    }
-
-    async function importSession() {
-      const igUser = document.getElementById('ig-username').value.trim();
-      const rawJson = document.getElementById('ig-session-json').value.trim();
-      const proxy = document.getElementById('ig-proxy').value.trim();
-      const fb = document.getElementById('auth-feedback');
-      if (!igUser || !rawJson) {
-        fb.textContent = 'Enter the Instagram username and session JSON.';
-        fb.className = 'text-warn';
-        return;
-      }
-      fb.textContent = 'Importing and verifying session JSON...';
-      fb.className = 'text-warn';
-      try {
-        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/import`, {
-          method: 'POST',
-          body: JSON.stringify({ ig_username: igUser, session_json: rawJson, proxy })
-        });
-        activeIg = res.ig_username || igUser;
-        hydratedKey = `${currentUser}:${activeIg}`;
-        fb.textContent = res.message;
-        fb.className = res.ok ? 'text-ok' : 'text-err';
-        await loadUsers();
-      } catch (e) {
-        fb.textContent = e.message;
-        fb.className = 'text-err';
-      }
-    }
-
-    async function toggleRealtime(key, val) {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/toggle`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg, [key]: val })
-      });
-      await refreshState();
-    }
-
-    async function reloginSlot() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      const fb = document.getElementById('auth-feedback');
-      fb.textContent = 'Re-logging in...';
-      fb.className = 'text-warn';
-      const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/relogin`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg })
-      });
-      fb.textContent = res.message;
-      fb.className = res.ok ? 'text-ok' : 'text-err';
-      await refreshState();
-    }
-
-    async function resetDevice() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      const fb = document.getElementById('auth-feedback');
-      fb.textContent = 'Resetting device identity...';
-      fb.className = 'text-warn';
-      const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/reset_device`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg })
-      });
-      fb.textContent = res.message;
-      fb.className = res.ok ? 'text-ok' : 'text-warn';
-      await refreshState();
-    }
-
-    async function logoutSlot() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/logout`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg })
-      });
-      await refreshState();
-    }
-
-    async function removeSlot() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/remove`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg })
-      });
-      activeIg = '';
-      hydratedKey = '';
-      await loadUsers();
-    }
-
-    function downloadActiveSession() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      const a = document.createElement('a');
-      a.href = `/api/users/${encodeURIComponent(currentUser)}/accounts/${encodeURIComponent(activeIg)}/session`;
-      a.download = `${activeIg}_session.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
-
-    async function saveTelegram() {
-      const fb = document.getElementById('tg-feedback');
-      fb.textContent = 'Saving...';
-      try {
-        await api(`/api/users/${encodeURIComponent(currentUser)}/telegram`, {
-          method: 'POST',
-          body: JSON.stringify({
-            tg_chat_id: document.getElementById('tg-chat-id').value.trim(),
-            tg_admin_id: document.getElementById('tg-admin-id').value.trim(),
-            tg_token: document.getElementById('tg-token').value.trim()
-          })
-        });
-        fb.textContent = 'Saved Telegram settings.';
-        fb.className = 'text-ok';
-        await refreshState();
-      } catch (e) {
-        fb.textContent = e.message;
-        fb.className = 'text-err';
-      }
-    }
-
-    async function unlinkTopic(threadId) {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/unlink_topic`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg, thread_id: threadId })
-      });
-      await refreshState();
-    }
-
-    async function quickCmd(cmd) {
-      document.getElementById('cmd-input').value = cmd;
-      await runBotCommand();
-    }
-
-    async function runBotCommand() {
-      const inp = document.getElementById('cmd-input');
-      const cmd = inp.value.trim();
-      if (!cmd || !currentUser) return;
-      inp.value = '';
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/command`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg, command: cmd })
-      });
-      await refreshState();
-    }
-
-    async function submitCode() {
-      const code = document.getElementById('code-input').value.trim();
-      if (!code || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/code`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg, code })
-      });
-      document.getElementById('code-input').value = '';
-      await refreshState();
-    }
-
-    async function fetchLogs() {
-      if (!currentUser) return;
-      try {
-        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/logs?since=${lastLogId}`);
-        const inc = res.logs || [];
-        if (inc.length > 0) {
-          logs.push(...inc);
-          if (logs.length > 400) logs = logs.slice(-400);
-          lastLogId = logs[logs.length - 1].id;
-          renderLogs();
-        } else if (logs.length === 0) {
-          renderLogs();
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    function renderLogs() {
-      const box = document.getElementById('log-box');
-      if (logs.length === 0) {
-        box.innerHTML = '<div style="color: var(--text-dim);">No log output yet.</div>';
-        return;
-      }
-      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-      box.innerHTML = logs.map(l =>
-        `<div class="log-line"><span class="log-ts">${l.timestamp}</span><span class="log-lvl-${l.level}">${l.level}</span><span>${escapeHtml(l.message)}</span></div>`
-      ).join('');
-      if (atBottom) box.scrollTop = box.scrollHeight;
-    }
-
-    async function clearLogs() {
-      if (!currentUser) return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/logs/clear`, { method: 'POST', body: '{}' });
-      logs = [];
-      lastLogId = 0;
-      renderLogs();
-    }
-
-    function downloadLogs() {
-      if (!currentUser) return;
-      const txt = logs.map(l => `${l.timestamp} [${l.level}] ${l.message}`).join('\\n');
-      const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `${currentUser}_logs.txt`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
-
-    function escapeHtml(s) {
-      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-
-    document.getElementById('user-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') openUserFromSidebar();
-    });
-    document.getElementById('hero-user-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') openUserFromHero();
-    });
-    document.getElementById('cmd-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') runBotCommand();
-    });
-
-    loadUsers();
-    setInterval(() => {
-      if (currentUser) refreshState();
-    }, 3000);
-  </script>
-</body>
-</html>
-"""
 
 
 def _send_json(writer: asyncio.StreamWriter, status_code: int, payload: dict) -> None:
@@ -1876,9 +748,21 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
                         await writer.drain()
                         return
 
+                    if subpath == "accounts/attach" and method == "POST":
+                        data = parse_json_body()
+                        slot = await ws.attach_account(str(data.get("ig_username") or ""))
+                        _send_json(
+                            writer,
+                            200,
+                            {"ok": True, "ig_username": slot.ig_username, "state": await ws.to_state_dict()},
+                        )
+                        await writer.drain()
+                        return
+
                     if subpath == "accounts/login" and method == "POST":
                         data = parse_json_body()
                         slot = await ws.ensure_slot(str(data.get("ig_username") or ""))
+                        await ws.attach_account(slot.ig_username)
                         ok, msg = await slot.login_with_password(data)
                         _send_json(
                             writer,
@@ -1891,6 +775,7 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
                     if subpath == "accounts/cookie" and method == "POST":
                         data = parse_json_body()
                         slot = await ws.ensure_slot(str(data.get("ig_username") or ""))
+                        await ws.attach_account(slot.ig_username)
                         ok, msg = await slot.login_with_cookie(
                             raw_cookie=str(data.get("cookie") or ""),
                             proxy=str(data.get("proxy") or ""),
@@ -1906,6 +791,7 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
                     if subpath == "accounts/import" and method == "POST":
                         data = parse_json_body()
                         slot = await ws.ensure_slot(str(data.get("ig_username") or ""))
+                        await ws.attach_account(slot.ig_username)
                         ok, msg = await slot.import_session(
                             raw_json=str(data.get("session_json") or ""),
                             proxy=str(data.get("proxy") or ""),
@@ -1989,7 +875,7 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
                     if subpath == "accounts/command" and method == "POST":
                         data = parse_json_body()
                         ig_u = str(data.get("ig_username") or "")
-                        slot = ws.slots.get(sanitize_username(ig_u)) or (next(iter(ws.slots.values()), None))
+                        slot = ws.slots.get(sanitize_username(ig_u)) or ws.get_attached_slot()
                         cmd_str = str(data.get("command") or "").strip()
                         if not slot:
                             add_user_log(ws.username, "WARNING", "console", "Add an Instagram account first to run commands.")
@@ -2038,11 +924,12 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
                         await writer.drain()
                         return
 
-            resp_body = DASHBOARD_HTML.encode("utf-8")
+            resp_body = UI_HTML_PATH.read_bytes()
             headers = (
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: text/html; charset=utf-8\r\n"
                 f"Content-Length: {len(resp_body)}\r\n"
+                "Cache-Control: no-store\r\n"
                 "Connection: close\r\n\r\n"
             ).encode("utf-8")
             writer.write(headers + resp_body)
@@ -2076,6 +963,8 @@ async def main() -> None:
     setup_logging(base_cfg.log_level)
 
     manager = MultiUserManager(base_cfg)
+    _TokenHub.set_manager(manager)
+
     port = int(os.getenv("PORT", "3000"))
     web_server = await _start_web_server(manager, "0.0.0.0", port)
     bootstrap_task = asyncio.create_task(manager.bootstrap_existing())
