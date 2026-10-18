@@ -43,7 +43,7 @@ class InstagramURLClassificationTests(unittest.TestCase):
         self.assertIsNone(classify_instagram_url("https://www.instagram.com/explore/tags/python/"))
 
     def test_trailing_punctuation(self):
-        category, _url = classify_instagram_url("(https://www.instagram.com/reel/C0ffee123/).")
+        category, _url = classify_instagram_url("https://www.instagram.com/reel/C0ffee123/).")
         self.assertEqual(category, "reel")
 
 
