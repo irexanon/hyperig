@@ -22,7 +22,6 @@ if __name__ == "__main__":
         _EARLY_SOCK = None
 
 from config import Config, build_user_config, load_config
-from core import osint_tools
 from core.auth import CookieError
 from core.context import AppContext
 from core.instagram import InstagramClient
@@ -97,7 +96,6 @@ class InstagramSlot:
             await self.bridge.start(self.ig, self.modules)
             await self.ig.restore_saved_session()
             self._poller_task = asyncio.create_task(self._run_poller())
-            await self.modules.start_all()
         finally:
             current_user_var.reset(tok)
 
@@ -297,7 +295,6 @@ class InstagramSlot:
     async def stop(self) -> None:
         tok = current_user_var.set(self.user_id)
         try:
-            await self.modules.stop_all()
             await self.ig.stop()
             if self._poller_task:
                 self._poller_task.cancel()
@@ -504,64 +501,8 @@ class UserWorkspace:
                 self.active_ig = next(iter(self.slots))
             if not self.bridged_ig and self.slots:
                 self.bridged_ig = self.active_ig
-            if not getattr(self, "_watcher_task", None) or self._watcher_task.done():
-                self._watcher_task = asyncio.create_task(
-                    self._watcher_loop(), name=f"watcher_{self.username}"
-                )
         finally:
             current_user_var.reset(tok)
-
-    async def _watcher_loop(self) -> None:
-        """Background OSINT & Story/Post Watcher loop for this workspace."""
-        import tempfile
-        while True:
-            await asyncio.sleep(600)  # check every 10 minutes
-            try:
-                if not self.tg_admin_id:
-                    continue
-                targets = await osint_tools.get_watched_targets(self)
-                if not targets:
-                    continue
-                slot = None
-                for c in (self.get_attached_slot(), self.get_active_slot(), *self.slots.values()):
-                    if c and c.ig.logged_in:
-                        slot = c
-                        break
-                if not slot:
-                    continue
-                hub = slot.bridge.hub or next(iter(_TokenHub._hubs.values()), None)
-                if not hub or not hub.running:
-                    continue
-                with tempfile.TemporaryDirectory(prefix="ig_bg_watch_") as tmp:
-                    tmp_path = Path(tmp)
-                    for u in list(targets.keys()):
-                        try:
-                            res = await osint_tools.check_watched_target(self, slot, u, tmp_path)
-                            diffs = res.get("diffs") or []
-                            s_files = res.get("new_story_files") or []
-                            p_files = res.get("new_post_files") or []
-                            if diffs:
-                                msg = f"🔔 <b>Watcher Alert: @{res['username']}</b>\n" + "\n".join(diffs)
-                                await hub.bot.send_message(chat_id=self.tg_admin_id, text=msg, parse_mode="HTML")
-                            if s_files:
-                                await hub._send_downloaded_files(
-                                    self.tg_admin_id,
-                                    s_files,
-                                    caption=f"📖 <b>Watcher — New Story from @{res['username']}</b>",
-                                )
-                            if p_files:
-                                await hub._send_downloaded_files(
-                                    self.tg_admin_id,
-                                    p_files,
-                                    caption=f"📸 <b>Watcher — New Post from @{res['username']}</b>",
-                                )
-                        except Exception as e:
-                            log.debug("Background watcher error on %s: %s", u, e)
-                        await asyncio.sleep(3)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                log.debug("Watcher loop iteration error: %s", e)
 
     async def _save_profile(self) -> None:
         await self.store.set(
@@ -699,10 +640,6 @@ class UserWorkspace:
             current_user_var.reset(tok)
 
     async def stop(self) -> None:
-        w_task = getattr(self, "_watcher_task", None)
-        if w_task:
-            w_task.cancel()
-            await asyncio.gather(w_task, return_exceptions=True)
         for slot in list(self.slots.values()):
             try:
                 await slot.stop()

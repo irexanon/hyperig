@@ -30,7 +30,6 @@ from telegram.ext import (
     filters,
 )
 
-from core import osint_tools
 from utils import media as media_utils
 from utils.db import sanitize_username
 from utils.logger import add_user_log, current_user_var, get_logger
@@ -49,10 +48,7 @@ class _TokenHub:
     Handles:
     - Private DM onboarding (/start -> Register or Login to a User Workspace)
     - Private DM interactive control panel (Select/Attach IG account to bridge, Login IG via Password/Cookie,
-      Toggle Realtime & FBNS, Set Group Chat ID, Download Session JSON)
-    - Auto-Detect Instagram Link Downloader (Reels, Posts, Carousels, Stories, Highlights, Profile Links)
-    - /dump & /profile Interactive OSINT & Profile DB Card with Manual Count / ALL selectors
-    - /watch Background & On-Demand OSINT Account / Story / Post Watcher
+      Toggle Realtime & FBNS, Set Group Chat ID, Download Session JSON, Run Commands)
     - Forum Group topic routing for the attached Instagram account.
     """
 
@@ -62,7 +58,7 @@ class _TokenHub:
 
     def __init__(self, token: str):
         self.token = token
-        self.app = Application.builder().token(token).concurrent_updates(True).build()
+        self.app = Application.builder().token(token).build()
         self.bot = self.app.bot
         self.running = False
         self.error = ""
@@ -71,8 +67,6 @@ class _TokenHub:
         self._commands_published = False
         # Per-Telegram-user conversational state: tg_user_id -> {"step": str, ...}
         self._chat_state: dict[int, dict] = {}
-        # Active single panel message ID per Telegram user so menus edit in-place
-        self._panel_msg_id: dict[int, int] = {}
 
     @classmethod
     def set_manager(cls, manager) -> None:
@@ -117,17 +111,16 @@ class _TokenHub:
         if not self._commands_published:
             try:
                 base_cmds = [
-                    BotCommand("start", "Open main menu"),
-                    BotCommand("dump", "OSINT Dump & action menu (@username)"),
-                    BotCommand("profile", "Fetch profile data + DB history (@username)"),
-                    BotCommand("dl", "Download any Instagram link"),
-                    BotCommand("watch", "Manage OSINT & Story Watcher"),
-                    BotCommand("accounts", "View & switch Instagram accounts"),
-                    BotCommand("status", "Show connection status"),
-                    BotCommand("dump", "Open a public profile with action buttons"),
-                    BotCommand("profile", "Public profile info"),
-                    BotCommand("link", "Link Telegram Forum Group"),
-                    BotCommand("logout", "Sign out of workspace"),
+                    BotCommand("start", "Open Bot Control Panel or Register/Login"),
+                    BotCommand("panel", "Manage Instagram accounts & Bridge settings"),
+                    BotCommand("status", "Show bridge, Realtime MQTT & FBNS status"),
+                    BotCommand("session", "Show active Instagram device & session info"),
+                    BotCommand("relogin", "Refresh Instagram login keeping device UUID"),
+                    BotCommand("cookie", "Log in with browser sessionid cookie"),
+                    BotCommand("code", "Submit 2FA or challenge verification code"),
+                    BotCommand("logout", "Log out active Instagram account"),
+                    BotCommand("link", "Link current Forum Group as bridge destination"),
+                    BotCommand("help", "Show all available commands"),
                 ]
                 await self.bot.set_my_commands(base_cmds)
                 self._commands_published = True
@@ -160,18 +153,8 @@ class _TokenHub:
                 return ws
         return None
 
-    @staticmethod
-    def _get_logged_in_slot(ws):
-        """Return the attached or active logged-in InstagramSlot, or any logged-in slot in the workspace."""
-        for candidate in (ws.get_attached_slot(), ws.get_active_slot()):
-            if candidate and candidate.ig.logged_in:
-                return candidate
-        for s in ws.slots.values():
-            if s.ig.logged_in:
-                return s
-        return None
-
     def _match_group_bridge(self, chat_id: int, topic_id: int | None, tg_user_id: int | None) -> "TelegramBridge | None":
+        # Match only bridges that are actively attached for this chat_id
         matching = [
             b for b in self.bridges
             if b.chat_id and b.chat_id == chat_id and b.attached
@@ -194,1147 +177,233 @@ class _TokenHub:
             return None
         return b
 
-    # ------------------------------------------------- In-Place Message Renderer
-    async def _show_panel(
-        self,
-        chat_id: int,
-        user_id: int,
-        text: str,
-        markup: InlineKeyboardMarkup | None = None,
-        edit_msg=None,
-        force_new: bool = False,
-    ) -> None:
-        """Updates the user's single active bot message in-place, or sends a new one if needed."""
-        if edit_msg is not None and not force_new:
-            try:
-                await edit_msg.edit_text(text, parse_mode="HTML", reply_markup=markup)
-                self._panel_msg_id[user_id] = edit_msg.message_id
-                return
-            except BadRequest as e:
-                if "message is not modified" in str(e).lower():
-                    self._panel_msg_id[user_id] = edit_msg.message_id
-                    return
-            except TelegramError:
-                pass
-
-        msg_id = self._panel_msg_id.get(user_id)
-        if msg_id and not force_new:
-            try:
-                await self.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    text=text,
-                    parse_mode="HTML",
-                    reply_markup=markup,
-                )
-                return
-            except BadRequest as e:
-                if "message is not modified" in str(e).lower():
-                    return
-            except TelegramError:
-                pass
-
-        if msg_id:
-            try:
-                await self.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except TelegramError:
-                pass
-
-        sent = await self.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            parse_mode="HTML",
-            reply_markup=markup,
-        )
-        self._panel_msg_id[user_id] = sent.message_id
-
-    @staticmethod
-    async def _try_delete(message) -> None:
-        if not message:
-            return
-        try:
-            await message.delete()
-        except TelegramError:
-            pass
-
-    async def _send_downloaded_files(
-        self,
-        chat_id: int,
-        files: list[Path],
-        caption: str = "",
-        reply_markup: InlineKeyboardMarkup | None = None,
-    ) -> int:
-        """Send a list of downloaded media files (photos/videos) to Telegram."""
-        sent_count = 0
-        total = len(files)
-        for idx, fpath in enumerate(files):
-            if not fpath or not fpath.exists():
-                continue
-            ext = fpath.suffix.lower()
-            cap = caption if idx == 0 else f"({idx + 1}/{total})"
-            rm = reply_markup if idx == total - 1 else None
-            try:
-                with open(fpath, "rb") as fp:
-                    if ext in (".mp4", ".mov", ".m4v", ".webm"):
-                        await self.bot.send_video(
-                            chat_id=chat_id,
-                            video=fp,
-                            caption=cap[:1024] if cap else None,
-                            parse_mode="HTML",
-                            reply_markup=rm,
-                        )
-                    elif ext in (".jpg", ".jpeg", ".png", ".webp"):
-                        await self.bot.send_photo(
-                            chat_id=chat_id,
-                            photo=fp,
-                            caption=cap[:1024] if cap else None,
-                            parse_mode="HTML",
-                            reply_markup=rm,
-                        )
-                    else:
-                        await self.bot.send_document(
-                            chat_id=chat_id,
-                            document=fp,
-                            caption=cap[:1024] if cap else None,
-                            parse_mode="HTML",
-                            reply_markup=rm,
-                        )
-                sent_count += 1
-            except TelegramError as e:
-                log.warning("Failed sending media %s: %s", fpath.name, e)
-        return sent_count
-
-    # ------------------------------------------------- Clean Menu Views
-    def _view_welcome(self, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        head = f"{notice}\n\n" if notice else ""
+    # ------------------------------------------------- Private Bot UI Builders
+    def _welcome_View(self) -> tuple[str, InlineKeyboardMarkup]:
         text = (
-            f"{head}"
-            "<b>Hyper Insta Bridge</b>\n"
-            "Sign in to your workspace or create a new one."
+            "👋 <b>Welcome to Hyper Insta Bridge</b>\n\n"
+            "Manage your Instagram accounts, Realtime MQTT/FBNS channels, session files, "
+            "and Telegram Forum bridge directly from this bot.\n\n"
+            "Choose an option below to get started:"
         )
         rows = [
             [
-                InlineKeyboardButton("🔑 Login", callback_data="auth:login"),
-                InlineKeyboardButton("🆕 Register", callback_data="auth:register"),
+                InlineKeyboardButton("🆕 Register New Workspace", callback_data="auth:register"),
+                InlineKeyboardButton("🔑 Login Existing Workspace", callback_data="auth:login"),
             ]
         ]
         return text, InlineKeyboardMarkup(rows)
 
-    def _view_home(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+    def _control_panel_view(self, ws) -> tuple[str, InlineKeyboardMarkup]:
         slot = ws.get_attached_slot() or ws.get_active_slot()
-        group_str = f"Linked (<code>{ws.tg_chat_id}</code>)" if ws.tg_chat_id else "Not linked"
+        chat_str = f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "<i>Not linked yet (send /link in your Forum Group)</i>"
+
         if slot:
-            badge = "🟢 Online" if slot.ig.logged_in else "🟠 Offline"
-            ig_str = f"<code>@{slot.ig_username}</code> ({badge})"
+            st_icon = "🟢 Logged In" if slot.ig.logged_in else "🟠 Logged Out"
+            rt_str = "ON (Connected)" if slot.ig.realtime.rt_connected else ("ON" if slot.cfg.realtime else "OFF")
+            fbns_str = "ON (Connected)" if slot.ig.realtime.fbns_connected else ("ON" if slot.cfg.fbns else "OFF")
+            acc_summary = (
+                f"📸 <b>Attached IG Account:</b> <code>@{slot.ig_username}</code>\n"
+                f"🔐 <b>Auth Status:</b> {st_icon} ({slot.ig.auth.login_method})\n"
+                f"⚡ <b>Realtime MQTT:</b> {rt_str} · 🔔 <b>FBNS:</b> {fbns_str}\n"
+                f"💬 <b>Bridged Topics:</b> {len(slot.bridge.topics)} · <b>DMs Forwarded:</b> {slot.bridge.forwarded}"
+            )
         else:
-            ig_str = "None"
+            acc_summary = "📸 <b>Instagram Accounts:</b> <i>None added yet. Click ➕ Login IG below to add one.</i>"
 
-        head = f"{notice}\n\n" if notice else ""
         text = (
-            f"{head}"
-            f"<b>Hyper Insta Bridge</b>\n\n"
-            f"👤 <b>Workspace:</b> <code>{ws.username}</code>\n"
-            f"💬 <b>Group:</b> {group_str}\n"
-            f"📸 <b>Bridged IG:</b> {ig_str}\n\n"
-            f"<i>💡 Paste any Instagram link here to auto-download, or use Dump / Watcher below.</i>"
+            f"🎛 <b>Hyper Insta Control Center</b>\n"
+            f"👤 <b>Workspace DB:</b> <code>{ws.username}</code>\n"
+            f"📡 <b>Forum Group ID:</b> {chat_str}\n\n"
+            f"{acc_summary}\n\n"
+            f"<i>Select an Instagram account below to attach it to your Telegram bridge, or manage your session:</i>"
         )
-        count = len(ws.slots)
-        rows = [
-            [
-                InlineKeyboardButton(f"📸 Accounts ({count})", callback_data="nav:accounts"),
-                InlineKeyboardButton("➕ Add IG", callback_data="nav:add_ig"),
-            ],
-            [
-                InlineKeyboardButton("🕵️ Dump / Profile", callback_data="nav:dump"),
-                InlineKeyboardButton("👁 OSINT Watcher", callback_data="nav:watcher"),
-            ],
-            [
-                InlineKeyboardButton("📊 Status", callback_data="nav:status"),
-                InlineKeyboardButton("🔗 Link Group", callback_data="nav:group"),
-            ],
-            [
-                InlineKeyboardButton("🔄 Refresh", callback_data="nav:home"),
-                InlineKeyboardButton("🚪 Sign Out", callback_data="auth:logout"),
-            ],
-        ]
-        return text, InlineKeyboardMarkup(rows)
-
-    def _view_accounts(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        head = f"{notice}\n\n" if notice else ""
-        if not ws.slots:
-            text = (
-                f"{head}"
-                "<b>Instagram Accounts</b>\n\n"
-                "No Instagram accounts added yet."
-            )
-        else:
-            text = (
-                f"{head}"
-                "<b>Instagram Accounts</b>\n"
-                "Tap an account to manage it or attach it to the bridge:"
-            )
 
         rows: list[list[InlineKeyboardButton]] = []
-        for ig_u, s in ws.slots.items():
-            is_attached = (ig_u == ws.bridged_ig)
-            pin = "✅" if is_attached else "⚪"
-            dot = "🟢" if s.ig.logged_in else "🟠"
-            rows.append(
-                [
+        # Account selector buttons (choose which IG account is attached to the bridge)
+        if ws.slots:
+            acc_btns = []
+            for ig_u, s in ws.slots.items():
+                is_attached = (ig_u == ws.bridged_ig)
+                prefix = "✅ " if is_attached else "⚪ "
+                online = "🟢" if s.ig.logged_in else "🟠"
+                acc_btns.append(
                     InlineKeyboardButton(
-                        f"{pin} @{ig_u} ({dot})",
-                        callback_data=f"acct:view:{ig_u}",
+                        f"{prefix}@{ig_u} {online}",
+                        callback_data=f"ig:attach:{ig_u}",
                     )
-                ]
-            )
+                )
+            for i in range(0, len(acc_btns), 2):
+                rows.append(acc_btns[i : i + 2])
+
         rows.append(
             [
-                InlineKeyboardButton("➕ Add IG", callback_data="nav:add_ig"),
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+                InlineKeyboardButton("➕ Login IG (Password)", callback_data="ig:add_pw"),
+                InlineKeyboardButton("🍪 Login IG (Cookie)", callback_data="ig:add_ck"),
             ]
         )
-        return text, InlineKeyboardMarkup(rows)
 
-    def _view_account_card(self, ws, ig_u: str, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        slot = ws.slots.get(ig_u)
-        if not slot:
-            return self._view_accounts(ws, notice="⚠️ Account not found.")
-
-        is_attached = (ig_u == ws.bridged_ig)
-        status_str = "🟢 Logged In" if slot.ig.logged_in else "🟠 Logged Out"
-        rt_str = "ON" if slot.cfg.realtime else "OFF"
-        fbns_str = "ON" if slot.cfg.fbns else "OFF"
-        head = f"{notice}\n\n" if notice else ""
-
-        text = (
-            f"{head}"
-            f"<b>@{slot.ig_username}</b>\n\n"
-            f"Status: {status_str} (<code>{slot.ig.auth.login_method}</code>)\n"
-            f"Realtime: <b>{rt_str}</b> · FBNS: <b>{fbns_str}</b>\n"
-            f"Bridged Topics: <b>{len(slot.bridge.topics)}</b>"
-        )
-
-        attach_btn = (
-            InlineKeyboardButton("✅ Attached to Bridge", callback_data=f"acct:attach:{ig_u}")
-            if is_attached
-            else InlineKeyboardButton("📌 Attach to Bridge", callback_data=f"acct:attach:{ig_u}")
-        )
-
-        rows = [
-            [attach_btn],
-            [
-                InlineKeyboardButton(f"⚡ Realtime: {rt_str}", callback_data=f"acct:rt:{ig_u}"),
-                InlineKeyboardButton(f"🔔 FBNS: {fbns_str}", callback_data=f"acct:fbns:{ig_u}"),
-            ],
-            [
-                InlineKeyboardButton("🔄 Relogin", callback_data=f"acct:relogin:{ig_u}"),
-                InlineKeyboardButton("📥 Session .json", callback_data=f"acct:dl:{ig_u}"),
-            ],
-            [
-                InlineKeyboardButton("🕵️ My Profile Dump", callback_data=f"dump:open:{ig_u}"),
-                InlineKeyboardButton("🗑 Logout IG", callback_data=f"acct:logout:{ig_u}"),
-            ],
-            [
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:accounts"),
-            ],
-        ]
-        return text, InlineKeyboardMarkup(rows)
-
-    def _view_add_ig(self, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        head = f"{notice}\n\n" if notice else ""
-        text = (
-            f"{head}"
-            "<b>Add Instagram Account</b>\n\n"
-            "Choose a login method below, or send a <code>session.json</code> file in this chat."
-        )
-        rows = [
-            [
-                InlineKeyboardButton("🔐 Password Login", callback_data="add:pw"),
-                InlineKeyboardButton("🍪 Cookie Login", callback_data="add:ck"),
-            ],
-            [
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
-            ],
-        ]
-        return text, InlineKeyboardMarkup(rows)
-
-    def _view_status(self, ws) -> tuple[str, InlineKeyboardMarkup]:
-        slot = ws.get_attached_slot() or ws.get_active_slot()
-        group_str = f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "Not linked"
-        lines = [
-            "<b>Bridge Status</b>",
-            "",
-            f"👤 <b>Workspace:</b> <code>{ws.username}</code>",
-            f"💬 <b>Forum Group:</b> {group_str}",
-        ]
         if slot:
-            st = "🟢 Online" if slot.ig.logged_in else "🟠 Offline"
-            rt = "🟢 Connected" if slot.ig.realtime.rt_connected else ("ON" if slot.cfg.realtime else "OFF")
-            fb = "🟢 Connected" if slot.ig.realtime.fbns_connected else ("ON" if slot.cfg.fbns else "OFF")
-            lines.extend(
-                [
-                    f"📸 <b>Attached IG:</b> <code>@{slot.ig_username}</code> ({st})",
-                    f"⚡ <b>Realtime MQTT:</b> {rt} ({slot.ig.realtime.events} events)",
-                    f"🔔 <b>FBNS Push:</b> {fb} ({slot.ig.realtime.pushes} pushes)",
-                    f"💬 <b>Topics:</b> {len(slot.bridge.topics)} · <b>Forwarded:</b> {slot.bridge.forwarded}",
-                ]
-            )
-        else:
-            lines.append("📸 <b>Attached IG:</b> None")
-
-        rows = [
-            [
-                InlineKeyboardButton("🔄 Refresh", callback_data="nav:status"),
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
-            ]
-        ]
-        return "\n".join(lines), InlineKeyboardMarkup(rows)
-
-    def _view_group(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        head = f"{notice}\n\n" if notice else ""
-        group_str = f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "Not linked"
-        text = (
-            f"{head}"
-            f"<b>Link Telegram Forum Group</b>\n\n"
-            f"Current Group: {group_str}\n\n"
-            f"1. Add @{self.bot_username} as an <b>Admin</b> in your Forum Group (enable <i>Manage Topics</i>).\n"
-            f"2. Type <code>/link</code> inside the group, or tap below to enter the Group ID."
-        )
-        rows = [
-            [
-                InlineKeyboardButton("✏️ Enter Group ID", callback_data="group:set"),
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
-            ]
-        ]
-        return text, InlineKeyboardMarkup(rows)
-
-    # ------------------------------------------------- Dump / Profile DB / Watcher Views
-    @staticmethod
-    def _dump_card_markup(uname: str, is_watched: bool) -> InlineKeyboardMarkup:
-        watch_label = "🔕 Unwatch" if is_watched else "👁 Watch Account"
-        rows = [
-            [
-                InlineKeyboardButton("🖼 HD Avatar", callback_data=f"dump:avatar:{uname}"),
-                InlineKeyboardButton("🗄 Profile DB (.json)", callback_data=f"dump:dbjson:{uname}"),
-            ],
-            [
-                InlineKeyboardButton("📖 Active Stories", callback_data=f"dump:stories:{uname}"),
-                InlineKeyboardButton("✨ Highlights", callback_data=f"dump:hl:{uname}"),
-            ],
-            [
-                InlineKeyboardButton("📸 Posts", callback_data=f"dump:sel:posts:{uname}"),
-                InlineKeyboardButton("🎬 Reels", callback_data=f"dump:sel:reels:{uname}"),
-                InlineKeyboardButton("🏷 Tagged", callback_data=f"dump:sel:tagged:{uname}"),
-            ],
-            [
-                InlineKeyboardButton("👥 Followers", callback_data=f"dump:sel:followers:{uname}"),
-                InlineKeyboardButton("👣 Following", callback_data=f"dump:sel:following:{uname}"),
-            ],
-            [
-                InlineKeyboardButton(watch_label, callback_data=f"dump:watch:{uname}"),
-                InlineKeyboardButton("🔄 Rescan", callback_data=f"dump:open:{uname}"),
-            ],
-            [
-                InlineKeyboardButton("🗄 Saved Profiles DB", callback_data="nav:profile_db"),
-                InlineKeyboardButton("⬅️ Home", callback_data="nav:home"),
-            ],
-        ]
-        return InlineKeyboardMarkup(rows)
-
-    @staticmethod
-    def _view_count_selector(kind: str, uname: str) -> tuple[str, InlineKeyboardMarkup]:
-        labels = {
-            "posts": ("📸 Posts", [3, 5, 10, 25], "📦 Download ALL Posts"),
-            "reels": ("🎬 Reels", [3, 5, 10, 25], "📦 Download ALL Reels"),
-            "tagged": ("🏷 Tagged Media", [3, 5, 10, 25], "📦 Download ALL Tagged"),
-            "followers": ("👥 Followers CSV/JSON", [50, 100, 250], "📦 Export ALL Followers"),
-            "following": ("👣 Following CSV/JSON", [50, 100, 250], "📦 Export ALL Following"),
-        }
-        title, presets, all_label = labels.get(kind, ("📦 Items", [5, 10, 25], "📦 Download ALL"))
-        text = (
-            f"<b>{title} — @{uname}</b>\n\n"
-            f"Choose how many items to fetch, tap <b>🔢 Enter Custom Count</b> to type any number, or tap <b>{all_label}</b>:"
-        )
-        preset_row = [
-            InlineKeyboardButton(str(n), callback_data=f"dump:run:{kind}:{n}:{uname}")
-            for n in presets
-        ]
-        rows = [
-            preset_row,
-            [
-                InlineKeyboardButton("🔢 Enter Custom Count", callback_data=f"dump:custom:{kind}:{uname}"),
-                InlineKeyboardButton(all_label, callback_data=f"dump:run:{kind}:0:{uname}"),
-            ],
-            [
-                InlineKeyboardButton(f"⬅️ Back to @{uname}", callback_data=f"dump:open:{uname}"),
-            ],
-        ]
-        return text, InlineKeyboardMarkup(rows)
-
-    async def _view_watcher(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        targets = await osint_tools.get_watched_targets(ws)
-        head = f"{notice}\n\n" if notice else ""
-        if not targets:
-            text = (
-                f"{head}"
-                "<b>👁 OSINT &amp; Story Watcher</b>\n\n"
-                "No accounts are being watched yet.\n"
-                "Add a target to monitor profile changes (bio, username, followers, privacy) and auto-grab new Stories &amp; Posts."
-            )
-        else:
-            lines = [
-                f"{head}<b>👁 OSINT &amp; Story Watcher ({len(targets)})</b>",
-                "Tap any watched account to open its OSINT Dump Card:",
-                "",
-            ]
-            for u, meta in targets.items():
-                last_c = (meta.get("last_checked") or "Not scanned yet")[:16].replace("T", " ")
-                s_cnt = len(meta.get("seen_stories") or [])
-                lines.append(f"• <b>@{u}</b> — Last check: <code>{last_c}</code> ({s_cnt} stories tracked)")
-            text = "\n".join(lines)
-
-        rows: list[list[InlineKeyboardButton]] = []
-        for u in list(targets.keys())[:10]:
+            rt_lbl = f"⚡ Realtime: {'ON' if slot.cfg.realtime else 'OFF'}"
+            fb_lbl = f"🔔 FBNS: {'ON' if slot.cfg.fbns else 'OFF'}"
             rows.append(
                 [
-                    InlineKeyboardButton(f"🕵️ @{u}", callback_data=f"dump:open:{u}"),
-                    InlineKeyboardButton("🗑 Unwatch", callback_data=f"watch:rm:{u}"),
+                    InlineKeyboardButton(rt_lbl, callback_data=f"ig:toggle_rt:{slot.ig_username}"),
+                    InlineKeyboardButton(fb_lbl, callback_data=f"ig:toggle_fbns:{slot.ig_username}"),
                 ]
             )
+            rows.append(
+                [
+                    InlineKeyboardButton("📊 Status", callback_data="cmd:status"),
+                    InlineKeyboardButton("📱 Device Info", callback_data="cmd:session"),
+                    InlineKeyboardButton("📥 Session .json", callback_data=f"ig:dl:{slot.ig_username}"),
+                ]
+            )
+            rows.append(
+                [
+                    InlineKeyboardButton("🔄 Relogin", callback_data="cmd:relogin"),
+                    InlineKeyboardButton("💬 Set Group ID", callback_data="ws:set_group"),
+                    InlineKeyboardButton("🚪 Logout IG", callback_data=f"ig:logout:{slot.ig_username}"),
+                ]
+            )
+        else:
+            rows.append(
+                [
+                    InlineKeyboardButton("💬 Set Group Chat ID", callback_data="ws:set_group"),
+                ]
+            )
+
         rows.append(
             [
-                InlineKeyboardButton("➕ Add Target", callback_data="watch:add"),
-                InlineKeyboardButton("⚡ Scan All Now", callback_data="watch:scan_all"),
-            ]
-        )
-        rows.append(
-            [
-                InlineKeyboardButton("🗄 Profile DB", callback_data="nav:profile_db"),
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+                InlineKeyboardButton("🔀 Switch / Sign Out", callback_data="auth:switch"),
+                InlineKeyboardButton("🔄 Refresh Panel", callback_data="panel:refresh"),
             ]
         )
         return text, InlineKeyboardMarkup(rows)
-
-    async def _view_profile_db(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        db_map: dict = await ws.store.get("profile_db", {}) or {}
-        head = f"{notice}\n\n" if notice else ""
-        if not db_map:
-            text = (
-                f"{head}"
-                "<b>🗄 Saved Profile Database</b>\n\n"
-                "No profiles saved in database yet. Use <code>/profile @username</code> or <code>/dump @username</code> to scan and store profiles."
-            )
-            rows = [
-                [
-                    InlineKeyboardButton("🕵️ Scan Profile", callback_data="nav:dump"),
-                    InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
-                ]
-            ]
-            return text, InlineKeyboardMarkup(rows)
-
-        entries = sorted(
-            db_map.values(),
-            key=lambda e: str(e.get("last_seen") or ""),
-            reverse=True,
-        )
-        lines = [
-            f"{head}<b>🗄 Saved Profile Database ({len(entries)} profiles)</b>",
-            "Every scan saves full profile metadata &amp; change history in your workspace DB:",
-            "",
-        ]
-        rows: list[list[InlineKeyboardButton]] = []
-        for e in entries[:10]:
-            lat = e.get("latest") or {}
-            uname = lat.get("username") or e.get("pk")
-            scans = e.get("scan_count", 1)
-            flw = int(lat.get("follower_count", 0) or 0)
-            lines.append(f"• <b>@{uname}</b> (<code>{e.get('pk')}</code>) — {flw:,} flw · {scans} scans")
-            if uname:
-                rows.append(
-                    [
-                        InlineKeyboardButton(f"🕵️ @{uname} ({scans} scans)", callback_data=f"dump:open:{uname}"),
-                        InlineKeyboardButton("📥 DB .json", callback_data=f"dump:dbjson:{uname}"),
-                    ]
-                )
-        rows.append(
-            [
-                InlineKeyboardButton("📦 Export Full DB (.json)", callback_data="db:export_all"),
-                InlineKeyboardButton("🕵️ New Lookup", callback_data="nav:dump"),
-            ]
-        )
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="nav:home")])
-        return "\n".join(lines), InlineKeyboardMarkup(rows)
-
-    async def _open_dump_card(
-        self,
-        chat_id: int,
-        user_id: int,
-        ws,
-        target_username: str,
-        send_db_json: bool = False,
-        edit_msg=None,
-        notice: str = "",
-    ) -> None:
-        slot = self._get_logged_in_slot(ws)
-        if not slot:
-            text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first to run OSINT / Profile dumps.")
-            await self._show_panel(chat_id, user_id, text, markup, edit_msg=edit_msg)
-            return
-
-        uname = sanitize_username(target_username)
-        if not uname:
-            await self._show_panel(
-                chat_id,
-                user_id,
-                "⚠️ Please provide a valid Instagram username.",
-                self._cancel_markup("nav:home"),
-                edit_msg=edit_msg,
-            )
-            return
-
-        await self._show_panel(
-            chat_id,
-            user_id,
-            f"🔎 <b>Scanning @{uname}</b> (fetching Profile, OSINT metadata &amp; updating Profile DB)...",
-            edit_msg=edit_msg,
-        )
-        try:
-            rec, diffs, db_entry = await osint_tools.fetch_and_save_profile_db(ws, slot, uname, deep_osint=True)
-            watched = await osint_tools.is_target_watched(ws, rec["username"])
-            card_html = osint_tools.format_profile_card_html(rec, diffs, db_entry, is_watched=watched)
-            if notice:
-                card_html = f"{notice}\n\n{card_html}"
-            markup = self._dump_card_markup(rec["username"], watched)
-            await self._show_panel(chat_id, user_id, card_html, markup, edit_msg=edit_msg)
-
-            if send_db_json:
-                raw_bytes = json.dumps(db_entry, indent=2, ensure_ascii=False, default=str).encode("utf-8")
-                await self.bot.send_document(
-                    chat_id=chat_id,
-                    document=InputFile(io.BytesIO(raw_bytes), filename=f"profile_db_{rec['username']}.json"),
-                    caption=f"🗄 Profile DB Record & History for @{rec['username']} (Scan #{db_entry.get('scan_count', 1)})",
-                )
-        except Exception as e:
-            text, markup = self._view_home(ws, notice=f"❌ Failed to fetch @{uname}: {e}")
-            await self._show_panel(chat_id, user_id, text, markup, edit_msg=edit_msg)
-
-    async def _execute_dump_batch(
-        self,
-        chat_id: int,
-        user_id: int,
-        ws,
-        kind: str,
-        amount: int,
-        uname: str,
-        edit_msg=None,
-    ) -> None:
-        slot = self._get_logged_in_slot(ws)
-        if not slot:
-            text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
-            await self._show_panel(chat_id, user_id, text, markup, edit_msg=edit_msg)
-            return
-
-        amt_str = "ALL" if amount <= 0 else str(amount)
-        await self._show_panel(
-            chat_id,
-            user_id,
-            f"⏳ <b>Fetching {amt_str} {kind} for @{uname}...</b>\nPlease wait while files are prepared.",
-            edit_msg=edit_msg,
-        )
-
-        try:
-            if kind in ("followers", "following"):
-                csv_bytes, json_bytes, count, canonical = await slot.ig._call(
-                    osint_tools._export_follow_list_sync,
-                    slot.ig.cl,
-                    uname,
-                    kind,
-                    amount,
-                )
-                await self.bot.send_document(
-                    chat_id=chat_id,
-                    document=InputFile(io.BytesIO(csv_bytes), filename=f"{canonical}_{kind}_{count}.csv"),
-                    caption=f"📊 @{canonical} — {count} {kind} (.csv)",
-                )
-                await self.bot.send_document(
-                    chat_id=chat_id,
-                    document=InputFile(io.BytesIO(json_bytes), filename=f"{canonical}_{kind}_{count}.json"),
-                    caption=f"🗄 @{canonical} — {count} {kind} (.json)",
-                )
-                await self._open_dump_card(
-                    chat_id,
-                    user_id,
-                    ws,
-                    canonical,
-                    notice=f"✅ Exported <b>{count} {kind}</b> for @{canonical}.",
-                )
-                return
-
-            # Media dump: posts | reels | tagged
-            items, canonical = await slot.ig._call(
-                osint_tools._fetch_user_media_list_sync,
-                slot.ig.cl,
-                uname,
-                kind,
-                amount,
-            )
-            if not items:
-                await self._open_dump_card(
-                    chat_id,
-                    user_id,
-                    ws,
-                    canonical,
-                    notice=f"ℹ️ No {kind} found for @{canonical}.",
-                )
-                return
-
-            sent_files = 0
-            with tempfile.TemporaryDirectory(prefix="ig_dump_") as tmp:
-                tmp_path = Path(tmp)
-                for idx, m in enumerate(items, start=1):
-                    files = await slot.ig._call(
-                        osint_tools._download_media_item_sync,
-                        slot.ig.cl,
-                        m,
-                        tmp_path,
-                    )
-                    likes = int(getattr(m, "like_count", 0) or 0)
-                    comments = int(getattr(m, "comment_count", 0) or 0)
-                    cap_txt = str(getattr(m, "caption_text", "") or "").strip()
-                    cap_short = (cap_txt[:250] + "…") if len(cap_txt) > 250 else cap_txt
-                    safe_cap = cap_short.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                    cap = f"📸 <b>@{canonical}</b> ({idx}/{len(items)}) · ❤️ {likes:,} · 💬 {comments:,}"
-                    if safe_cap:
-                        cap += f"\n{safe_cap}"
-                    sent_files += await self._send_downloaded_files(chat_id, files, caption=cap)
-
-            await self._open_dump_card(
-                chat_id,
-                user_id,
-                ws,
-                canonical,
-                notice=f"✅ Sent <b>{sent_files}</b> media file(s) from <b>{len(items)} {kind}</b> of @{canonical}.",
-            )
-        except Exception as e:
-            await self._open_dump_card(
-                chat_id,
-                user_id,
-                ws,
-                uname,
-                notice=f"❌ Dump failed: {e}",
-            )
-
-    async def _handle_ig_link_download(
-        self,
-        chat_id: int,
-        user_id: int,
-        ws,
-        url: str,
-    ) -> None:
-        cat, target = osint_tools.detect_ig_url_category(url)
-        if cat == "profile":
-            await self._open_dump_card(chat_id, user_id, ws, target)
-            return
-
-        slot = self._get_logged_in_slot(ws)
-        if not slot:
-            text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first to download links.")
-            await self._show_panel(chat_id, user_id, text, markup, force_new=True)
-            return
-
-        await self._show_panel(
-            chat_id,
-            user_id,
-            f"📥 <b>Auto-Detected {cat.upper()} Link</b>\nDownloading media from Instagram...",
-            force_new=True,
-        )
-        try:
-            with tempfile.TemporaryDirectory(prefix="ig_dl_") as tmp:
-                res = await osint_tools.download_ig_link(slot, url, Path(tmp))
-                files = res.get("files") or []
-                author = sanitize_username(res.get("author") or "")
-                caption = res.get("caption") or "📥 Downloaded from Instagram"
-                btn_rows = []
-                if author:
-                    btn_rows.append(
-                        [InlineKeyboardButton(f"🕵️ Dump @{author}", callback_data=f"dump:open:{author}")]
-                    )
-                btn_rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="nav:home")])
-                rm = InlineKeyboardMarkup(btn_rows)
-                count = await self._send_downloaded_files(chat_id, files, caption=caption, reply_markup=rm)
-            v_txt, markup = self._view_home(ws, notice=f"✅ Downloaded {count} file(s) ({res.get('category', 'Media')}).")
-            await self._show_panel(chat_id, user_id, v_txt, markup)
-        except Exception as e:
-            v_txt, markup = self._view_home(ws, notice=f"❌ Download failed: {e}")
-            await self._show_panel(chat_id, user_id, v_txt, markup)
-
-    @staticmethod
-    def _cancel_markup(target: str = "nav:home") -> InlineKeyboardMarkup:
-        return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=target)]])
 
     # ------------------------------------------------- Callback Query Handler
     async def _on_callback(self, update: Update, context) -> None:
         query = update.callback_query
-        if not query or not query.from_user or not query.message:
+        if not query or not query.from_user:
             return
         await query.answer()
         user_id = query.from_user.id
-        chat_id = query.message.chat_id
         data = query.data or ""
         mgr = self._manager
         if not mgr:
             return
 
-        # Clear any pending prompt state when navigating
-        self._chat_state.pop(user_id, None)
-
-        if data == "auth:cancel":
-            text, markup = self._view_welcome()
-            await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-            return
-
-        if data in ("auth:register", "auth:login", "auth:logout"):
-            if data == "auth:logout":
+        if data in ("auth:register", "auth:login", "auth:switch"):
+            if data == "auth:switch":
                 prev_ws = self._find_workspace_for_user(user_id)
                 if prev_ws:
                     await prev_ws.update_telegram({"tg_admin_id": "0"})
-                text, markup = self._view_welcome("✅ Signed out.")
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                self._chat_state.pop(user_id, None)
+                text, markup = self._welcome_View()
+                await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
                 return
-
             mode = "register" if data == "auth:register" else "login"
-            self._chat_state[user_id] = {"step": "ws_user", "mode": mode}
-            title = "🆕 <b>Register Workspace</b>" if mode == "register" else "🔑 <b>Workspace Login</b>"
-            await self._show_panel(
-                chat_id,
-                user_id,
-                f"{title}\n\nSend your <b>workspace username</b>:",
-                self._cancel_markup("auth:cancel"),
-                edit_msg=query.message,
+            self._chat_state[user_id] = {"step": "await_workspace_username", "mode": mode}
+            prompt = (
+                "🆕 <b>Register New Workspace</b>\n\n"
+                "Step 1/2: Reply with a new <b>username</b> for your workspace:"
+                if mode == "register"
+                else "🔑 <b>Sign In to Existing Workspace</b>\n\nStep 1/2: Reply with your <b>workspace username</b>:"
             )
+            await query.message.reply_text(prompt, parse_mode="HTML")
             return
 
         ws = self._find_workspace_for_user(user_id)
         if not ws:
-            text, markup = self._view_welcome()
-            await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+            text, markup = self._welcome_View()
+            await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
             return
 
         tok = current_user_var.set(ws.username)
         try:
-            # Buttons owned by a module ("m:<prefix>:<rest>"), e.g. the /dump menu.
-            if data.startswith("m:"):
-                prefix, _, rest = data[2:].partition(":")
-                slot = ws.get_attached_slot() or ws.get_active_slot()
-                found = slot.modules.all_callbacks().get(prefix) if slot else None
-                if not found:
-                    return
+            if data == "panel:refresh":
+                text, markup = self._control_panel_view(ws)
                 try:
-                    await found[0](rest, query, context)
-                except Exception as e:
-                    log.warning("Button handler %s failed: %s", prefix, e)
-                    try:
-                        await query.message.reply_text(f"❌ {type(e).__name__}: {e}")
-                    except TelegramError:
-                        pass
+                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+                except TelegramError:
+                    await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
                 return
 
-            if data == "nav:home":
-                text, markup = self._view_home(ws)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data == "nav:accounts":
-                text, markup = self._view_accounts(ws)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data == "nav:add_ig":
-                text, markup = self._view_add_ig()
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data == "nav:status":
-                text, markup = self._view_status(ws)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data == "nav:group":
-                text, markup = self._view_group(ws)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data == "nav:dump":
-                self._chat_state[user_id] = {"step": "dump_target"}
-                db_map: dict = await ws.store.get("profile_db", {}) or {}
-                rows: list[list[InlineKeyboardButton]] = []
-                recent_entries = sorted(
-                    db_map.values(),
-                    key=lambda e: str(e.get("last_seen") or ""),
-                    reverse=True,
-                )[:6]
-                cur_row: list[InlineKeyboardButton] = []
-                for e in recent_entries:
-                    u = (e.get("latest") or {}).get("username")
-                    if u:
-                        cur_row.append(InlineKeyboardButton(f"@{u}", callback_data=f"dump:open:{u}"))
-                        if len(cur_row) == 2:
-                            rows.append(cur_row)
-                            cur_row = []
-                if cur_row:
-                    rows.append(cur_row)
-                rows.append(
-                    [
-                        InlineKeyboardButton("🗄 Saved Profile DB", callback_data="nav:profile_db"),
-                        InlineKeyboardButton("❌ Cancel", callback_data="nav:home"),
-                    ]
-                )
-                await self._show_panel(
-                    chat_id,
-                    user_id,
-                    "🕵️ <b>OSINT Dump &amp; Profile Lookup</b>\n\n"
-                    "Send any Instagram <b>@username</b> or profile URL (or tap a recent profile below):",
-                    InlineKeyboardMarkup(rows),
-                    edit_msg=query.message,
-                )
-                return
-
-            if data == "nav:watcher":
-                text, markup = await self._view_watcher(ws)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data == "nav:profile_db":
-                text, markup = await self._view_profile_db(ws)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data == "db:export_all":
-                db_map = await ws.store.get("profile_db", {}) or {}
-                raw_bytes = json.dumps(db_map, indent=2, ensure_ascii=False, default=str).encode("utf-8")
-                await query.message.reply_document(
-                    document=InputFile(io.BytesIO(raw_bytes), filename=f"{ws.username}_profile_db.json"),
-                    caption=f"🗄 Complete Profile Database ({len(db_map)} profiles)",
-                )
-                return
-
-            if data == "watch:add":
-                self._chat_state[user_id] = {"step": "watch_target"}
-                await self._show_panel(
-                    chat_id,
-                    user_id,
-                    "👁 <b>Add Account to Watcher</b>\n\nSend the Instagram <b>@username</b> to monitor:",
-                    self._cancel_markup("nav:watcher"),
-                    edit_msg=query.message,
-                )
-                return
-
-            if data.startswith("watch:rm:"):
-                uname = sanitize_username(data.split(":", 2)[2])
-                await osint_tools.toggle_watch_target(ws, uname)
-                text, markup = await self._view_watcher(ws, notice=f"🔕 Removed <b>@{uname}</b> from Watcher.")
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data == "watch:scan_all":
-                slot = self._get_logged_in_slot(ws)
-                if not slot:
-                    text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
-                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                    return
-                targets = await osint_tools.get_watched_targets(ws)
-                if not targets:
-                    text, markup = await self._view_watcher(ws, notice="ℹ️ No watched accounts to scan.")
-                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                    return
-                await self._show_panel(
-                    chat_id,
-                    user_id,
-                    f"⚡ <b>Scanning {len(targets)} watched account(s)...</b>",
-                    edit_msg=query.message,
-                )
-                alerts_sent = 0
-                with tempfile.TemporaryDirectory(prefix="ig_watch_") as tmp:
-                    tmp_path = Path(tmp)
-                    for u in list(targets.keys()):
-                        try:
-                            res = await osint_tools.check_watched_target(ws, slot, u, tmp_path)
-                            diffs = res.get("diffs") or []
-                            s_files = res.get("new_story_files") or []
-                            p_files = res.get("new_post_files") or []
-                            if diffs:
-                                msg = f"🔔 <b>Watcher Alert: @{res['username']}</b>\n" + "\n".join(diffs)
-                                await self.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
-                                alerts_sent += 1
-                            if s_files:
-                                await self._send_downloaded_files(
-                                    chat_id, s_files, caption=f"📖 <b>New Story from @{res['username']}</b>"
-                                )
-                                alerts_sent += 1
-                            if p_files:
-                                await self._send_downloaded_files(
-                                    chat_id, p_files, caption=f"📸 <b>New Post from @{res['username']}</b>"
-                                )
-                                alerts_sent += 1
-                        except Exception as e:
-                            log.warning("Watch scan failed for %s: %s", u, e)
-                note = f"✅ Scanned {len(targets)} account(s). ({alerts_sent} new update alert(s))."
-                text, markup = await self._view_watcher(ws, notice=note)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            # ------------------------------------------------- Dump Card Callbacks
-            if data.startswith("dump:open:"):
-                uname = sanitize_username(data.split(":", 2)[2])
-                await self._open_dump_card(chat_id, user_id, ws, uname, edit_msg=query.message)
-                return
-
-            if data.startswith("dump:watch:"):
-                uname = sanitize_username(data.split(":", 2)[2])
-                now_watched = await osint_tools.toggle_watch_target(ws, uname)
-                note = f"👁 Now watching <b>@{uname}</b>." if now_watched else f"🔕 Unwatched <b>@{uname}</b>."
-                await self._open_dump_card(chat_id, user_id, ws, uname, edit_msg=query.message, notice=note)
-                return
-
-            if data.startswith("dump:dbjson:"):
-                uname = sanitize_username(data.split(":", 2)[2])
-                await self._open_dump_card(chat_id, user_id, ws, uname, send_db_json=True, edit_msg=query.message)
-                return
-
-            if data.startswith("dump:avatar:"):
-                uname = sanitize_username(data.split(":", 2)[2])
-                slot = self._get_logged_in_slot(ws)
-                if not slot:
-                    text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
-                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                    return
-                await self._show_panel(chat_id, user_id, f"🖼 <b>Downloading HD Avatar for @{uname}...</b>", edit_msg=query.message)
-                try:
-                    with tempfile.TemporaryDirectory(prefix="ig_av_") as tmp:
-                        fpath, canonical = await slot.ig._call(
-                            osint_tools._download_avatar_sync, slot.ig.cl, uname, Path(tmp)
-                        )
-                        await self._send_downloaded_files(chat_id, [fpath], caption=f"🖼 <b>HD Avatar — @{canonical}</b>")
-                    await self._open_dump_card(chat_id, user_id, ws, canonical, notice="✅ Sent HD Avatar.")
-                except Exception as e:
-                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Avatar error: {e}")
-                return
-
-            if data.startswith("dump:stories:"):
-                uname = sanitize_username(data.split(":", 2)[2])
-                slot = self._get_logged_in_slot(ws)
-                if not slot:
-                    text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
-                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                    return
-                await self._show_panel(chat_id, user_id, f"📖 <b>Fetching active stories for @{uname}...</b>", edit_msg=query.message)
-                try:
-                    with tempfile.TemporaryDirectory(prefix="ig_st_") as tmp:
-                        files, canonical = await slot.ig._call(
-                            osint_tools._download_active_stories_sync, slot.ig.cl, uname, Path(tmp)
-                        )
-                        if not files:
-                            await self._open_dump_card(chat_id, user_id, ws, canonical, notice=f"ℹ️ @{canonical} has no active stories right now.")
-                            return
-                        cnt = await self._send_downloaded_files(
-                            chat_id, files, caption=f"📖 <b>Active Stories — @{canonical}</b> ({len(files)})"
-                        )
-                    await self._open_dump_card(chat_id, user_id, ws, canonical, notice=f"✅ Sent {cnt} active story file(s).")
-                except Exception as e:
-                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Stories error: {e}")
-                return
-
-            if data.startswith("dump:hl:"):
-                uname = sanitize_username(data.split(":", 2)[2])
-                slot = self._get_logged_in_slot(ws)
-                if not slot:
-                    text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
-                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                    return
-                await self._show_panel(chat_id, user_id, f"✨ <b>Loading Highlights for @{uname}...</b>", edit_msg=query.message)
-                try:
-                    hl_list, canonical = await slot.ig._call(osint_tools._list_highlights_sync, slot.ig.cl, uname)
-                    if not hl_list:
-                        await self._open_dump_card(chat_id, user_id, ws, canonical, notice=f"ℹ️ @{canonical} has no Highlights.")
-                        return
-                    rows: list[list[InlineKeyboardButton]] = []
-                    for h in hl_list[:12]:
-                        rows.append(
-                            [
-                                InlineKeyboardButton(
-                                    f"✨ {h['title']} ({h['media_count']})",
-                                    callback_data=f"dump:hlget:{h['pk']}:{canonical}",
-                                )
-                            ]
-                        )
-                    rows.append(
-                        [
-                            InlineKeyboardButton("📦 Download ALL Highlights", callback_data=f"dump:hlall:{canonical}"),
-                            InlineKeyboardButton(f"⬅️ Back to @{canonical}", callback_data=f"dump:open:{canonical}"),
-                        ]
-                    )
-                    await self._show_panel(
-                        chat_id,
-                        user_id,
-                        f"✨ <b>Highlights for @{canonical} ({len(hl_list)})</b>\nTap a highlight tray to download, or download all:",
-                        InlineKeyboardMarkup(rows),
-                        edit_msg=query.message,
-                    )
-                except Exception as e:
-                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Highlights error: {e}")
-                return
-
-            if data.startswith("dump:hlget:"):
-                parts = data.split(":", 3)
-                hpk, uname = parts[2], sanitize_username(parts[3])
-                slot = self._get_logged_in_slot(ws)
-                if not slot:
-                    return
-                await self._show_panel(chat_id, user_id, f"⏳ <b>Downloading Highlight for @{uname}...</b>", edit_msg=query.message)
-                try:
-                    with tempfile.TemporaryDirectory(prefix="ig_hl_") as tmp:
-                        files, title = await slot.ig._call(
-                            osint_tools._download_highlight_sync, slot.ig.cl, hpk, Path(tmp)
-                        )
-                        cnt = await self._send_downloaded_files(
-                            chat_id, files, caption=f"✨ <b>Highlight '{title}' — @{uname}</b> ({len(files)})"
-                        )
-                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"✅ Sent {cnt} item(s) from Highlight '{title}'.")
-                except Exception as e:
-                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Highlight error: {e}")
-                return
-
-            if data.startswith("dump:hlall:"):
-                uname = sanitize_username(data.split(":", 2)[2])
-                slot = self._get_logged_in_slot(ws)
-                if not slot:
-                    return
-                await self._show_panel(chat_id, user_id, f"⏳ <b>Downloading ALL Highlights for @{uname}...</b>", edit_msg=query.message)
-                try:
-                    hl_list, canonical = await slot.ig._call(osint_tools._list_highlights_sync, slot.ig.cl, uname)
-                    total_sent = 0
-                    with tempfile.TemporaryDirectory(prefix="ig_hlall_") as tmp:
-                        tmp_path = Path(tmp)
-                        for h in hl_list[:10]:
-                            files, title = await slot.ig._call(
-                                osint_tools._download_highlight_sync, slot.ig.cl, h["pk"], tmp_path
-                            )
-                            total_sent += await self._send_downloaded_files(
-                                chat_id, files, caption=f"✨ <b>Highlight '{title}' — @{canonical}</b>"
-                            )
-                    await self._open_dump_card(chat_id, user_id, ws, canonical, notice=f"✅ Sent {total_sent} Highlight file(s).")
-                except Exception as e:
-                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Highlights error: {e}")
-                return
-
-            if data.startswith("dump:sel:"):
-                parts = data.split(":", 3)
-                kind, uname = parts[2], sanitize_username(parts[3])
-                text, markup = self._view_count_selector(kind, uname)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data.startswith("dump:custom:"):
-                parts = data.split(":", 3)
-                kind, uname = parts[2], sanitize_username(parts[3])
-                self._chat_state[user_id] = {"step": "dump_count", "kind": kind, "target": uname}
-                await self._show_panel(
-                    chat_id,
-                    user_id,
-                    f"🔢 <b>Custom Count — @{uname} ({kind})</b>\n\n"
-                    f"Send how many <b>{kind}</b> you want to download/export (e.g. <code>12</code>, or <code>0</code> for ALL):",
-                    self._cancel_markup(f"dump:open:{uname}"),
-                    edit_msg=query.message,
-                )
-                return
-
-            if data.startswith("dump:run:"):
-                parts = data.split(":", 4)
-                kind = parts[2]
-                amount = int(parts[3])
-                uname = sanitize_username(parts[4])
-                await self._execute_dump_batch(chat_id, user_id, ws, kind, amount, uname, edit_msg=query.message)
-                return
-
-            # ------------------------------------------------- Group & Account Callbacks
-            if data == "group:set":
-                self._chat_state[user_id] = {"step": "group_id"}
-                await self._show_panel(
-                    chat_id,
-                    user_id,
-                    "<b>Set Forum Group ID</b>\n\nSend your Group Chat ID (starts with <code>-100</code>):",
-                    self._cancel_markup("nav:group"),
-                    edit_msg=query.message,
-                )
-                return
-
-            if data in ("add:pw", "add:ck"):
-                login_type = "pw" if data == "add:pw" else "ck"
-                label = "🔐 <b>Password Login</b>" if login_type == "pw" else "🍪 <b>Cookie Login</b>"
-                self._chat_state[user_id] = {"step": "ig_user", "login_type": login_type}
-                await self._show_panel(
-                    chat_id,
-                    user_id,
-                    f"{label}\n\nSend the <b>Instagram username</b>:",
-                    self._cancel_markup("nav:add_ig"),
-                    edit_msg=query.message,
-                )
-                return
-
-            if data.startswith("acct:view:"):
-                ig_u = sanitize_username(data.split(":", 2)[2])
-                text, markup = self._view_account_card(ws, ig_u)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data.startswith("acct:attach:"):
+            if data.startswith("ig:attach:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 await ws.attach_account(ig_u)
-                text, markup = self._view_account_card(ws, ig_u, notice=f"📌 Attached @{ig_u} to bridge.")
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                text, markup = self._control_panel_view(ws)
+                try:
+                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+                except TelegramError:
+                    await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
                 return
 
-            if data.startswith("acct:rt:"):
+            if data == "ig:add_pw":
+                self._chat_state[user_id] = {"step": "await_ig_pw"}
+                await query.message.reply_text(
+                    "🔐 <b>Instagram Password Login</b>\n"
+                    "<i>(Realtime &amp; FBNS will be automatically enabled)</i>\n\n"
+                    "Reply in this format:\n"
+                    "<code>ig_username password</code>\n"
+                    "or with a proxy:\n"
+                    "<code>ig_username password http://user:pass@host:port</code>",
+                    parse_mode="HTML",
+                )
+                return
+
+            if data == "ig:add_ck":
+                self._chat_state[user_id] = {"step": "await_ig_ck"}
+                await query.message.reply_text(
+                    "🍪 <b>Instagram Cookie Login</b>\n"
+                    "<i>(Realtime &amp; FBNS will be automatically disabled)</i>\n\n"
+                    "Reply in this format:\n"
+                    "<code>ig_username sessionid_cookie</code>\n"
+                    "or with a proxy:\n"
+                    "<code>ig_username sessionid_cookie http://user:pass@host:port</code>",
+                    parse_mode="HTML",
+                )
+                return
+
+            if data == "ws:set_group":
+                self._chat_state[user_id] = {"step": "await_group_id"}
+                await query.message.reply_text(
+                    "💬 <b>Link Telegram Forum Group</b>\n\n"
+                    "Reply with your Forum Group's Chat ID (starts with <code>-100</code>), "
+                    "OR simply add this bot as an Admin in your Forum Group and type <code>/link</code> inside the group.",
+                    parse_mode="HTML",
+                )
+                return
+
+            if data.startswith("ig:toggle_rt:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 slot = ws.slots.get(ig_u)
                 if slot:
                     await slot.apply_config({"realtime": not slot.cfg.realtime})
-                text, markup = self._view_account_card(ws, ig_u)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                text, markup = self._control_panel_view(ws)
+                try:
+                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+                except TelegramError:
+                    pass
                 return
 
-            if data.startswith("acct:fbns:"):
+            if data.startswith("ig:toggle_fbns:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 slot = ws.slots.get(ig_u)
                 if slot:
                     await slot.apply_config({"fbns": not slot.cfg.fbns})
-                text, markup = self._view_account_card(ws, ig_u)
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                text, markup = self._control_panel_view(ws)
+                try:
+                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+                except TelegramError:
+                    pass
                 return
 
-            if data.startswith("acct:relogin:"):
-                ig_u = sanitize_username(data.split(":", 2)[2])
-                slot = ws.slots.get(ig_u)
-                if slot:
-                    await self._show_panel(
-                        chat_id,
-                        user_id,
-                        f"⏳ Re-logging in to <b>@{ig_u}</b>...",
-                        edit_msg=query.message,
-                    )
-                    ok, msg_txt = await slot.relogin()
-                    notice = f"{'✅' if ok else '❌'} {msg_txt}"
-                    text, markup = self._view_account_card(ws, ig_u, notice=notice)
-                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data.startswith("acct:dl:"):
+            if data.startswith("ig:dl:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 slot = ws.slots.get(ig_u)
                 session_obj = await slot.get_session_json() if slot else None
                 if not session_obj:
-                    text, markup = self._view_account_card(ws, ig_u, notice="⚠️ No saved session file yet.")
-                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                    await query.message.reply_text("⚠️ No saved session found for this account yet.")
                     return
                 raw_bytes = json.dumps(session_obj, indent=2, default=str).encode("utf-8")
                 await query.message.reply_document(
@@ -1343,13 +412,26 @@ class _TokenHub:
                 )
                 return
 
-            if data.startswith("acct:logout:"):
+            if data.startswith("ig:logout:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 slot = ws.slots.get(ig_u)
                 if slot:
                     await slot.logout()
-                text, markup = self._view_account_card(ws, ig_u, notice=f"🚪 Logged out @{ig_u}.")
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                text, markup = self._control_panel_view(ws)
+                try:
+                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+                except TelegramError:
+                    pass
+                return
+
+            if data.startswith("cmd:"):
+                cmd_name = data.split(":", 1)[1]
+                slot = ws.get_attached_slot() or ws.get_active_slot()
+                if not slot:
+                    await query.message.reply_text("⚠️ Add and select an Instagram account first.")
+                    return
+                reply = await slot.run_command(f"/{cmd_name}")
+                await query.message.reply_text(reply)
                 return
         finally:
             current_user_var.reset(tok)
@@ -1364,7 +446,7 @@ class _TokenHub:
 
         text = (message.text or "").strip()
 
-        # 1. Private Chat with Bot
+        # 1. Private Chat with Bot: Registration, Login, Control Center & Direct Commands
         if chat.type == "private" and user:
             await self._handle_private_message(update, user.id, text)
             return
@@ -1375,17 +457,19 @@ class _TokenHub:
             if ws:
                 await ws.update_telegram({"tg_chat_id": str(chat.id), "tg_admin_id": str(user.id)})
                 await message.reply_text(
-                    f"✅ Linked this Forum Group (<code>{chat.id}</code>) to workspace <b>{ws.username}</b>.",
+                    f"✅ Linked this Forum Group (<code>{chat.id}</code>) to your workspace <b>{ws.username}</b>.\n"
+                    f"Manage accounts and run commands directly in my private chat (@{self.bot_username}).",
                     parse_mode="HTML",
                 )
             else:
                 await message.reply_text(
                     f"ℹ️ Group Chat ID is <code>{chat.id}</code>.\n"
-                    f"Open @{self.bot_username} in private chat and sign in first.",
+                    f"Open @{self.bot_username} in private chat and send /start first to sign in to your workspace.",
                     parse_mode="HTML",
                 )
             return
 
+        # Ignore other slash commands in group chats (commands execute directly in the bot's private chat)
         if text.startswith("/"):
             return
 
@@ -1407,42 +491,58 @@ class _TokenHub:
         finally:
             current_user_var.reset(tok)
 
-    async def _complete_workspace_auth(
-        self, chat_id: int, user_id: int, uname: str, password: str, mode: str
-    ) -> None:
+    async def _complete_workspace_auth(self, message, user_id: int, uname: str, password: str, mode: str) -> bool:
         mgr = self._manager
         if mode == "register":
             if mgr.workspace_exists(uname):
                 self._chat_state.pop(user_id, None)
-                text, markup = self._view_welcome(f"❌ Workspace <b>{uname}</b> already exists. Tap <b>Login</b>.")
-                await self._show_panel(chat_id, user_id, text, markup)
-                return
+                await message.reply_text(
+                    f"❌ Workspace <b>{uname}</b> is already registered.\n"
+                    f"Click <b>🔑 Login Existing Workspace</b> and enter your password to sign in.",
+                    parse_mode="HTML",
+                )
+                return False
             prev_ws = self._find_workspace_for_user(user_id)
             if prev_ws and prev_ws.username != uname:
                 await prev_ws.update_telegram({"tg_admin_id": "0"})
             ws = await mgr.register_workspace(uname, password)
             await ws.update_telegram({"tg_admin_id": str(user_id)})
             self._chat_state.pop(user_id, None)
-            text, markup = self._view_home(ws, notice=f"✅ Created workspace <b>{ws.username}</b>.")
-            await self._show_panel(chat_id, user_id, text, markup)
+            try:
+                await message.delete()
+            except TelegramError:
+                pass
+            await message.chat.send_message(
+                f"✅ Registered and authenticated workspace <b>{ws.username}</b>!",
+                parse_mode="HTML",
+            )
+            view_text, markup = self._control_panel_view(ws)
+            await message.chat.send_message(view_text, parse_mode="HTML", reply_markup=markup)
+            return True
         else:
             ws, err = await mgr.authenticate_workspace(uname, password)
             if not ws:
-                self._chat_state.pop(user_id, None)
-                text, markup = self._view_welcome(f"🔒 {err}")
-                await self._show_panel(chat_id, user_id, text, markup)
-                return
+                await message.reply_text(f"🔒 <b>Authentication Failed:</b> {err}", parse_mode="HTML")
+                return False
             prev_ws = self._find_workspace_for_user(user_id)
             if prev_ws and prev_ws.username != uname:
                 await prev_ws.update_telegram({"tg_admin_id": "0"})
             await ws.update_telegram({"tg_admin_id": str(user_id)})
             self._chat_state.pop(user_id, None)
-            text, markup = self._view_home(ws, notice=f"✅ Signed in to <b>{ws.username}</b>.")
-            await self._show_panel(chat_id, user_id, text, markup)
+            try:
+                await message.delete()
+            except TelegramError:
+                pass
+            await message.chat.send_message(
+                f"✅ Signed in to workspace <b>{ws.username}</b>!",
+                parse_mode="HTML",
+            )
+            view_text, markup = self._control_panel_view(ws)
+            await message.chat.send_message(view_text, parse_mode="HTML", reply_markup=markup)
+            return True
 
     async def _handle_private_message(self, update: Update, user_id: int, text: str) -> None:
         message = update.effective_message
-        chat_id = message.chat_id
         mgr = self._manager
         if not mgr:
             return
@@ -1450,300 +550,179 @@ class _TokenHub:
         ws = self._find_workspace_for_user(user_id)
         state = self._chat_state.get(user_id)
 
-        # Workspace Login / Register Step 1: Username
-        if state and state.get("step") == "ws_user" and not text.startswith("/"):
-            await self._try_delete(message)
+        # Quick /login <username> <password> or /register <username> <password>
+        if text.startswith(("/login ", "/register ")):
+            parts = text.split(None, 2)
+            mode = "register" if parts[0].startswith("/register") else "login"
+            if len(parts) == 3:
+                uname = sanitize_username(parts[1])
+                if uname:
+                    await self._complete_workspace_auth(message, user_id, uname, parts[2].strip(), mode)
+                    return
+            elif len(parts) == 2:
+                uname = sanitize_username(parts[1])
+                if uname:
+                    self._chat_state[user_id] = {"step": "await_workspace_password", "mode": mode, "username": uname}
+                    await message.reply_text(
+                        f"🔐 Step 2/2: Reply with the <b>password</b> for workspace <code>{uname}</code>:",
+                        parse_mode="HTML",
+                    )
+                    return
+
+        # Step 1: Awaiting workspace username during Registration / Login
+        if state and state.get("step") == "await_workspace_username" and not text.startswith("/"):
             uname = sanitize_username(text)
             if not uname:
-                await self._show_panel(
-                    chat_id,
-                    user_id,
-                    "⚠️ Enter a valid username (letters, numbers, dots, underscores):",
-                    self._cancel_markup("auth:cancel"),
-                )
+                await message.reply_text("⚠️ Please send a valid username (letters, numbers, dots, underscores).")
                 return
             mode = state.get("mode", "login")
             if mode == "register" and mgr.workspace_exists(uname):
-                self._chat_state.pop(user_id, None)
-                v_txt, markup = self._view_welcome(f"❌ Workspace <b>{uname}</b> already exists. Tap <b>Login</b>.")
-                await self._show_panel(chat_id, user_id, v_txt, markup)
-                return
-            if mode == "login" and not mgr.workspace_exists(uname):
-                self._chat_state.pop(user_id, None)
-                v_txt, markup = self._view_welcome(f"❌ Workspace <b>{uname}</b> not found. Tap <b>Register</b>.")
-                await self._show_panel(chat_id, user_id, v_txt, markup)
-                return
-            self._chat_state[user_id] = {"step": "ws_pass", "mode": mode, "username": uname}
-            prompt = (
-                f"🆕 <b>Register: {uname}</b>\n\nSend a new <b>password</b> (min 4 characters):"
-                if mode == "register"
-                else f"🔑 <b>Login: {uname}</b>\n\nSend your <b>password</b>:"
-            )
-            await self._show_panel(chat_id, user_id, prompt, self._cancel_markup("auth:cancel"))
-            return
-
-        # Workspace Login / Register Step 2: Password
-        if state and state.get("step") == "ws_pass" and not text.startswith("/"):
-            await self._try_delete(message)
-            pw = text.strip()
-            uname = state.get("username", "")
-            mode = state.get("mode", "login")
-            if len(pw) < 4:
-                await self._show_panel(
-                    chat_id,
-                    user_id,
-                    f"⚠️ Password must be at least 4 characters.\n\nSend password for <b>{uname}</b>:",
-                    self._cancel_markup("auth:cancel"),
+                await message.reply_text(
+                    f"❌ Workspace <b>{uname}</b> is already registered.\n"
+                    f"Reply with a different username, or click <b>🔑 Login Existing Workspace</b>.",
+                    parse_mode="HTML",
                 )
                 return
-            await self._complete_workspace_auth(chat_id, user_id, uname, pw, mode)
+            if mode == "login" and not mgr.workspace_exists(uname):
+                await message.reply_text(
+                    f"❌ Workspace <b>{uname}</b> does not exist.\n"
+                    f"Check the spelling or click <b>🆕 Register New Workspace</b> to create it.",
+                    parse_mode="HTML",
+                )
+                return
+            self._chat_state[user_id] = {"step": "await_workspace_password", "mode": mode, "username": uname}
+            await message.reply_text(
+                f"🔐 Step 2/2: Create a <b>password</b> for new workspace <code>{uname}</code> (min 4 characters):"
+                if mode == "register"
+                else f"🔐 Step 2/2: Enter your <b>password</b> for workspace <code>{uname}</code>:",
+                parse_mode="HTML",
+            )
             return
 
+        # Step 2: Awaiting workspace password during Registration / Login
+        if state and state.get("step") == "await_workspace_password" and not text.startswith("/"):
+            pw = text.strip()
+            if len(pw) < 4:
+                await message.reply_text("⚠️ Password must be at least 4 characters. Please reply with your password:")
+                return
+            await self._complete_workspace_auth(
+                message,
+                user_id,
+                state.get("username", ""),
+                pw,
+                state.get("mode", "login"),
+            )
+            return
+
+        # If not registered/logged into a workspace yet, prompt to register or login
         if not ws:
-            v_txt, markup = self._view_welcome()
-            await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+            view_text, markup = self._welcome_View()
+            await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
             return
 
         tok = current_user_var.set(ws.username)
         try:
-            # 1. Check if any Instagram slot is waiting for a 2FA / Challenge verification code
+            # Check if any slot is currently waiting for a 2FA / Challenge verification code
             for s in ws.slots.values():
                 if s.ig.auth.prompter.waiting and text and not text.startswith("/"):
-                    await self._try_delete(message)
                     code = text.strip().replace(" ", "")
                     if s.ig.auth.prompter.submit(code):
-                        await self._show_panel(
-                            chat_id,
-                            user_id,
-                            f"✅ Verification code submitted for <b>@{s.ig_username}</b>. Completing login...",
-                        )
+                        await message.reply_text(f"✅ Verification code submitted for @{s.ig_username}.")
                         return
 
-            # 2. Handle uploaded session.json file
+            # Handle uploaded session.json document in private chat
             if message.document and (message.document.file_name or "").endswith(".json"):
                 tg_file = await message.document.get_file()
                 raw_bytes = await tg_file.download_as_bytearray()
                 raw_json = raw_bytes.decode("utf-8", errors="replace")
-                ig_u = sanitize_username(
-                    message.document.file_name.replace("_session.json", "").replace(".json", "")
-                )
+                ig_u = sanitize_username(message.document.file_name.replace("_session.json", "").replace(".json", ""))
                 slot = await ws.ensure_slot(ig_u or ws.bridged_ig or ws.username)
                 ok, msg_txt = await slot.import_session(raw_json)
                 if ok and not ws.bridged_ig:
                     await ws.attach_account(slot.ig_username)
-                await self._try_delete(message)
-                notice = f"{'✅' if ok else '❌'} {msg_txt}"
-                v_txt, markup = self._view_account_card(ws, slot.ig_username, notice=notice)
-                await self._show_panel(chat_id, user_id, v_txt, markup)
+                await message.reply_text(f"{'✅' if ok else '❌'} {msg_txt}")
+                view_text, markup = self._control_panel_view(ws)
+                await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
                 return
 
-            # 3. Conversational prompts (Group ID, IG Username, IG Password/Cookie, Dump target, Custom Count, Watch target)
+            # Conversational step handlers
             if state and not text.startswith("/"):
                 step = state.get("step")
+                self._chat_state.pop(user_id, None)
 
-                if step == "group_id":
-                    await self._try_delete(message)
-                    self._chat_state.pop(user_id, None)
+                if step == "await_group_id":
                     try:
                         await ws.update_telegram({"tg_chat_id": text.strip()})
-                        notice = f"✅ Linked Forum Group <code>{ws.tg_chat_id}</code>."
+                        await message.reply_text(f"✅ Telegram Forum Group Chat ID set to <code>{ws.tg_chat_id}</code>.", parse_mode="HTML")
                     except Exception as e:
-                        notice = f"❌ {e}"
-                    v_txt, markup = self._view_home(ws, notice=notice)
-                    await self._show_panel(chat_id, user_id, v_txt, markup)
+                        await message.reply_text(f"❌ {e}")
+                    view_text, markup = self._control_panel_view(ws)
+                    await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
                     return
 
-                if step == "dump_target":
-                    await self._try_delete(message)
-                    self._chat_state.pop(user_id, None)
-                    url = osint_tools.extract_ig_url(text)
-                    if url:
-                        await self._handle_ig_link_download(chat_id, user_id, ws, url)
+                if step == "await_ig_pw":
+                    parts = text.split()
+                    if len(parts) < 2:
+                        await message.reply_text("⚠️ Format: <code>ig_username password [proxy]</code>", parse_mode="HTML")
                         return
-                    await self._open_dump_card(chat_id, user_id, ws, text.strip())
-                    return
-
-                if step == "watch_target":
-                    await self._try_delete(message)
-                    self._chat_state.pop(user_id, None)
-                    uname = sanitize_username(text)
-                    if uname:
-                        await osint_tools.toggle_watch_target(ws, uname)
-                        v_txt, markup = await self._view_watcher(ws, notice=f"👁 Added <b>@{uname}</b> to Watcher.")
-                    else:
-                        v_txt, markup = await self._view_watcher(ws, notice="⚠️ Invalid username.")
-                    await self._show_panel(chat_id, user_id, v_txt, markup)
-                    return
-
-                if step == "dump_count":
-                    await self._try_delete(message)
-                    kind = state.get("kind", "posts")
-                    target = state.get("target", "")
-                    raw_num = text.strip().lower()
-                    if raw_num in ("all", "0", "max"):
-                        amount = 0
-                    else:
-                        try:
-                            amount = max(0, int(raw_num))
-                        except ValueError:
-                            await self._show_panel(
-                                chat_id,
-                                user_id,
-                                f"⚠️ Send a valid number (e.g. <code>10</code> or <code>0</code> for ALL):",
-                                self._cancel_markup(f"dump:open:{target}"),
-                            )
-                            return
-                    self._chat_state.pop(user_id, None)
-                    await self._execute_dump_batch(chat_id, user_id, ws, kind, amount, target)
-                    return
-
-                if step == "ig_user":
-                    await self._try_delete(message)
-                    ig_u = sanitize_username(text)
-                    login_type = state.get("login_type", "pw")
-                    if not ig_u:
-                        await self._show_panel(
-                            chat_id,
-                            user_id,
-                            "⚠️ Send a valid Instagram username:",
-                            self._cancel_markup("nav:add_ig"),
-                        )
-                        return
-                    self._chat_state[user_id] = {
-                        "step": "ig_secret",
-                        "login_type": login_type,
-                        "ig_username": ig_u,
-                    }
-                    secret_name = "password" if login_type == "pw" else "sessionid cookie"
-                    await self._show_panel(
-                        chat_id,
-                        user_id,
-                        f"<b>@{ig_u}</b>\n\nSend your Instagram <b>{secret_name}</b>:",
-                        self._cancel_markup("nav:add_ig"),
-                    )
-                    return
-
-                if step == "ig_secret":
-                    await self._try_delete(message)
-                    secret = text.strip()
-                    ig_u = state.get("ig_username", "")
-                    login_type = state.get("login_type", "pw")
-                    self._chat_state.pop(user_id, None)
-
+                    ig_u, pw = parts[0], parts[1]
+                    proxy = parts[2] if len(parts) > 2 else ""
                     slot = await ws.ensure_slot(ig_u)
                     await ws.attach_account(slot.ig_username)
-                    await self._show_panel(
-                        chat_id,
-                        user_id,
-                        f"⏳ <b>Logging in to @{slot.ig_username}...</b>\nPlease wait a moment.",
-                    )
-                    if login_type == "pw":
-                        ok, res_msg = await slot.login_with_password({"password": secret})
-                    else:
-                        ok, res_msg = await slot.login_with_cookie(secret)
-                    notice = f"{'✅' if ok else '❌'} {res_msg}"
-                    v_txt, markup = self._view_account_card(ws, slot.ig_username, notice=notice)
-                    await self._show_panel(chat_id, user_id, v_txt, markup)
+                    wait_msg = await message.reply_text(f"⏳ Logging in to @{slot.ig_username} (Realtime=ON, FBNS=ON)...")
+                    ok, res_msg = await slot.login_with_password({"password": pw, "proxy": proxy})
+                    await wait_msg.edit_text(f"{'✅' if ok else '❌'} {res_msg}")
+                    view_text, markup = self._control_panel_view(ws)
+                    await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
                     return
 
-            # 4. Auto-Detect Any Pasted Instagram Link in Private Chat!
-            ig_url = osint_tools.extract_ig_url(text) if not text.startswith("/") else None
-            if ig_url:
-                await self._try_delete(message)
-                await self._handle_ig_link_download(chat_id, user_id, ws, ig_url)
-                return
+                if step == "await_ig_ck":
+                    parts = text.split()
+                    if len(parts) < 2:
+                        await message.reply_text("⚠️ Format: <code>ig_username sessionid_cookie [proxy]</code>", parse_mode="HTML")
+                        return
+                    ig_u, ck = parts[0], parts[1]
+                    proxy = parts[2] if len(parts) > 2 else ""
+                    slot = await ws.ensure_slot(ig_u)
+                    await ws.attach_account(slot.ig_username)
+                    wait_msg = await message.reply_text(f"⏳ Validating cookie for @{slot.ig_username} (Realtime=OFF, FBNS=OFF)...")
+                    ok, res_msg = await slot.login_with_cookie(ck, proxy=proxy)
+                    await wait_msg.edit_text(f"{'✅' if ok else '❌'} {res_msg}")
+                    view_text, markup = self._control_panel_view(ws)
+                    await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
+                    return
 
-            # 5. Slash Commands
+            # Slash commands in Bot Private Chat
             if text.startswith("/"):
-                self._chat_state.pop(user_id, None)
                 parts = text.split()
                 cmd_name = parts[0][1:].split("@")[0].lower()
                 args = parts[1:]
 
-                if cmd_name in ("start", "menu", "panel"):
-                    v_txt, markup = self._view_home(ws)
-                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                if cmd_name in ("start", "panel", "menu"):
+                    view_text, markup = self._control_panel_view(ws)
+                    await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
                     return
 
-                if cmd_name == "accounts":
-                    v_txt, markup = self._view_accounts(ws)
-                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
-                    return
-
-                if cmd_name == "status":
-                    v_txt, markup = self._view_status(ws)
-                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
-                    return
-
-                if cmd_name in ("dump", "osint"):
-                    if args:
-                        url = osint_tools.extract_ig_url(args[0])
-                        target = url if url else args[0]
-                        if url:
-                            await self._handle_ig_link_download(chat_id, user_id, ws, url)
-                        else:
-                            await self._open_dump_card(chat_id, user_id, ws, target)
-                        return
-                    self._chat_state[user_id] = {"step": "dump_target"}
-                    await self._show_panel(
-                        chat_id,
-                        user_id,
-                        "🕵️ <b>OSINT Dump &amp; Profile Lookup</b>\n\nSend any Instagram <b>@username</b> or profile URL:",
-                        self._cancel_markup("nav:home"),
-                        force_new=True,
-                    )
-                    return
-
-                if cmd_name == "profile":
-                    target = args[0] if args else (ws.bridged_ig or ws.active_ig)
-                    if not target:
-                        v_txt, markup = await self._view_profile_db(ws)
-                        await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
-                        return
-                    await self._open_dump_card(chat_id, user_id, ws, target, send_db_json=True)
-                    return
-
-                if cmd_name in ("dl", "download"):
-                    if not args:
-                        await self._show_panel(
-                            chat_id,
-                            user_id,
-                            "📥 <b>Instagram Auto-Downloader</b>\n\nPaste any Instagram Reel, Post, Story, Highlight, or Profile URL right here in the chat:",
-                            self._cancel_markup("nav:home"),
-                            force_new=True,
-                        )
-                        return
-                    url = osint_tools.extract_ig_url(args[0]) or args[0]
-                    await self._handle_ig_link_download(chat_id, user_id, ws, url)
-                    return
-
-                if cmd_name in ("watch", "watcher"):
-                    if args:
-                        uname = sanitize_username(args[0])
-                        if uname:
-                            now_w = await osint_tools.toggle_watch_target(ws, uname)
-                            note = f"👁 Added <b>@{uname}</b> to Watcher." if now_w else f"🔕 Removed <b>@{uname}</b> from Watcher."
-                            v_txt, markup = await self._view_watcher(ws, notice=note)
-                            await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
-                            return
-                    v_txt, markup = await self._view_watcher(ws)
-                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
-                    return
-
-                if cmd_name == "logout":
-                    await ws.update_telegram({"tg_admin_id": "0"})
-                    v_txt, markup = self._view_welcome("✅ Signed out.")
-                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                if cmd_name == "attach" and args:
+                    await ws.attach_account(args[0])
+                    await message.reply_text(f"✅ Attached @{ws.bridged_ig} to the Telegram bridge.")
                     return
 
                 slot = ws.get_attached_slot() or ws.get_active_slot()
-                if slot:
-                    await slot.bridge._handle_command(cmd_name, args, update)
+                if not slot:
+                    view_text, markup = self._control_panel_view(ws)
+                    await message.reply_text(
+                        "⚠️ Add an Instagram account first using the buttons below:",
+                        reply_markup=markup,
+                    )
                     return
 
-            # Default: show Home Menu
-            v_txt, markup = self._view_home(ws)
-            await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                await slot.bridge._handle_command(cmd_name, args, update)
+                return
+
+            # Default: show control panel
+            view_text, markup = self._control_panel_view(ws)
+            await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
         finally:
             current_user_var.reset(tok)
 
@@ -2063,17 +1042,12 @@ class TelegramBridge:
             return
         command, _mod = found
         try:
-            if command.takes_update:
-                await command.handler(args, update)  # the command sends its own reply
-                reply = None
-            else:
-                reply = await command.handler(args)
+            reply = await command.handler(args)
         except Exception as e:
             log.warning("Command /%s failed: %s", cmd_name, e)
             reply = f"❌ {type(e).__name__}: {e}"
         message = update.effective_message
-        if reply:
-            await message.reply_text(reply)
+        await message.reply_text(reply)
         if command.sensitive:
             try:
                 await message.delete()
