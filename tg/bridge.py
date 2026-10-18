@@ -489,7 +489,7 @@ class _TokenHub:
             f"<b>Link Telegram Forum Group</b>\n\n"
             f"Current Group: {group_str}\n\n"
             f"1. Add @{self.bot_username} as an <b>Admin</b> in your Forum Group (enable <i>Manage Topics</i>).\n"
-            f"2. Enter the Forum Group ID below in Settings. Alternatively, an admin can still use <code>/link</code> inside the group."
+            f"2. Tap <b>Enter Group ID</b> here. Alternatively, an admin can still use <code>/link</code> inside the group."
         )
         rows = [
             [
