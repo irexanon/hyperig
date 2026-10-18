@@ -8,7 +8,7 @@ import html
 import re
 import tempfile
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from telegram import InputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo
@@ -196,19 +196,34 @@ class AutoDownloadModule(BaseModule):
         except Exception as original_error:
             if "/s/" not in urlparse(url).path:
                 raise original_error
-        response = requests.get(
-            url,
-            timeout=15,
-            allow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
-        response.raise_for_status()
-        final_url = response.url
+        current_url = url
+        response = None
+        for _ in range(4):
+            parsed = urlparse(current_url)
+            if parsed.scheme.lower() != "https" or (parsed.hostname or "").lower() not in _ALLOWED_HOSTS:
+                raise ValueError("Instagram highlight link redirected outside instagram.com.")
+            response = requests.get(
+                current_url,
+                timeout=15,
+                allow_redirects=False,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("Location")
+                if not location:
+                    raise ValueError("Instagram returned an incomplete highlight redirect.")
+                current_url = urljoin(current_url, location)
+                continue
+            response.raise_for_status()
+            break
+        else:
+            raise ValueError("Too many redirects while resolving the Instagram highlight.")
+        final_url = current_url
         if "/highlights/" not in urlparse(final_url).path:
             # Some /s/ share URLs return an HTML page instead of a direct redirect.
             match = re.search(
                 r"https?://(?:www\.)?instagram\.com/stories/highlights/(\d+)/?",
-                response.text,
+                response.text if response is not None else "",
                 re.I,
             )
             if match:
@@ -464,11 +479,12 @@ class AutoDownloadModule(BaseModule):
         if category == "profile":
             manager = getattr(self.ctx, "modules", None)
             found = manager.all_commands().get("dump") if manager else None
-            if found:
+            username = urlparse(url).path.strip("/").split("/", 1)[0]
+            if found and _USERNAME_RE.fullmatch(username):
                 command, _module = found
-                await command.handler([url], update)
+                await command.handler([username], update)
             else:
-                await update.effective_message.reply_text(f"Use /dump {url} to open the profile card.")
+                await update.effective_message.reply_text(f"Use /dump {username or url} to open the profile card.")
             return
         audio = len(args) > 1 and args[1].lower() in {"audio", "track", "sound"}
         await self._run(update, url, category, audio=audio)
