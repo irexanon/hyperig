@@ -718,13 +718,19 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
                     return {}
 
             if path == "/api/users" and method == "GET":
-                _send_json(writer, 200, {"users": manager.list_summaries()})
+                # Privacy: never expose other users' workspaces globally
+                _send_json(writer, 200, {"users": []})
                 await writer.drain()
                 return
 
             if path == "/api/users" and method == "POST":
                 data = parse_json_body()
-                ws = await manager.get_or_create(str(data.get("username") or ""))
+                raw_uname = sanitize_username(str(data.get("username") or ""))
+                if not raw_uname:
+                    _send_json(writer, 400, {"error": "Please enter a valid username."})
+                    await writer.drain()
+                    return
+                ws = await manager.get_or_create(raw_uname)
                 _send_json(writer, 200, {"username": ws.username, "state": await ws.to_state_dict()})
                 await writer.drain()
                 return

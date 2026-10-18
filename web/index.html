@@ -773,39 +773,28 @@
 
     async function loadUsers() {
       try {
-        const data = await api('/api/users');
-        const users = data.users || [];
         const userListEl = document.getElementById('user-list');
 
-        if (!currentUser && users.length > 0) {
-          currentUser = users[0].username;
-          localStorage.setItem('hib_active_user', currentUser);
-        }
-
-        if (users.length === 0) {
-          userListEl.innerHTML = '<div style="font-size: 12px; color: var(--text-muted); padding: 4px 0;">No workspaces yet.</div>';
-        } else {
-          userListEl.innerHTML = users.map(u => {
-            const isAct = u.username === currentUser;
-            return `
-              <button class="nav-item ${isAct ? 'active' : ''}" onclick="switchUser('${u.username}')">
-                <span class="mono">${u.username}</span>
-                <span style="font-size: 11px; color: var(--text-muted);">${u.logged_in_count}/${u.account_count} IG</span>
-              </button>
-            `;
-          }).join('');
-        }
-
-        if (currentUser) {
-          document.getElementById('welcome-view').style.display = 'none';
-          document.getElementById('workspace-view').style.display = 'flex';
-          document.getElementById('sidebar-ig-wrap').style.display = 'flex';
-          await refreshState();
-        } else {
+        if (!currentUser) {
+          userListEl.innerHTML = '<div style="font-size: 12px; color: var(--text-muted); padding: 4px 0;">Not signed in. Enter your username above.</div>';
           document.getElementById('welcome-view').style.display = 'block';
           document.getElementById('workspace-view').style.display = 'none';
           document.getElementById('sidebar-ig-wrap').style.display = 'none';
+          document.getElementById('meta-user').textContent = 'None';
+          return;
         }
+
+        userListEl.innerHTML = `
+          <div class="nav-item active" style="cursor: default;">
+            <span class="mono">${currentUser}</span>
+            <button onclick="logoutWorkspace()" style="padding: 2px 8px; font-size: 11px;">Switch / Exit</button>
+          </div>
+        `;
+
+        document.getElementById('welcome-view').style.display = 'none';
+        document.getElementById('workspace-view').style.display = 'flex';
+        document.getElementById('sidebar-ig-wrap').style.display = 'flex';
+        await refreshState();
       } catch (e) {
         console.error(e);
       }
@@ -825,6 +814,16 @@
       lastLogId = 0;
       hydratedKey = '';
       await loadUsers();
+    }
+
+    function logoutWorkspace() {
+      currentUser = '';
+      localStorage.removeItem('hib_active_user');
+      activeIg = '';
+      logs = [];
+      lastLogId = 0;
+      hydratedKey = '';
+      loadUsers();
     }
 
     function openUserFromSidebar() {
