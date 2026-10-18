@@ -63,6 +63,7 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 | Command | What it does |
 |---|---|
 | `/ping`, `/status`, `/help` | health and help |
+| `/settings` | interactive panel to pause/resume DM bridge, select the bridged Instagram account, configure routing, and open account management |
 | `/session` | account, login method, device, app version, locale, proxy host (no secrets) |
 | `/cookie <sessionid>` | first login from a server using a browser cookie |
 | `/relogin` | fresh login, same device identity |
@@ -76,13 +77,16 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 | `/posts <user> [n]`, `/reels <user> [n]` | latest posts (1-20) or reels (1-10) |
 | `/stories <user>`, `/highlights <user>` | current stories, or a button list of highlights |
 
-| `/watch <user> [posts\|stories\|all]` | get new posts, reels and stories of a public account in this chat |
+| `/watch <user> [posts\|stories\|all]` | watch a public account for new posts, reels and stories |
 | `/unwatch <user>`, `/watchlist` | stop watching; list with remove / check-now buttons |
 
 **Watcher** (`modules/watcher.py`): up to 10 public accounts, checked about every 10 minutes with random
 jitter and a pause between accounts. Existing posts and stories are recorded when you add an account, so you
 only get what appears afterwards. Seen items are saved, so restarts never repeat or lose anything. A rate limit
 from Instagram pauses all checks for 15 minutes and tells you once; an account that turns private is removed.
+The current watcher does not guarantee detection of every Instagram action: likes, DMs, follows, comments,
+edits and deletions are not all exposed as a reliable event stream. Profile-change snapshots, engagement
+snapshots and highlight-change checks are possible future opt-in watch modes, subject to API availability.
 
 ## Instagram link downloader
 
@@ -101,6 +105,17 @@ The profile tools (`modules/dump.py`) work on **public accounts only**; a privat
 public card. They never show or export phone numbers, e-mail addresses or street addresses. One job runs
 per chat at a time, with a short pause between items, to keep the logged-in account out of rate limits.
 Run them in the private chat with the bot.
+
+## Telegram control panel
+
+The bot's `/start` opens a dashboard with account, status, routing and watchlist buttons. Use `/settings`
+to pause/resume DM forwarding, choose the Instagram account attached to the Forum Group, toggle Realtime
+MQTT / FBNS for that account, configure the group, and open account controls. The `/link` command is not
+listed in Telegram's slash-command suggestions; group linking can be configured from Settings (or invoked
+manually inside the Forum Group by an admin).
+
+The web dashboard has a matching **Settings** panel for the bridge toggle, attached account and account
+management. Bridge state is saved in the workspace profile and survives a restart.
 
 ## Realtime delivery (MQTT + FBNS)
 Both channels are instagrapi's own (`cl.realtime_*`, `cl.fbns_*`), enabled by default:

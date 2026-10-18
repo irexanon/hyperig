@@ -114,13 +114,16 @@ class _TokenHub:
         if not self._commands_published:
             try:
                 base_cmds = [
-                    BotCommand("start", "Open main menu"),
-                    BotCommand("accounts", "View & switch Instagram accounts"),
+                    BotCommand("start", "Open dashboard and status"),
+                    BotCommand("settings", "Bridge, accounts and watch settings"),
+                    BotCommand("accounts", "Manage Instagram accounts"),
                     BotCommand("status", "Show connection status"),
+                    BotCommand("watch", "Watch an account's new activity"),
+                    BotCommand("unwatch", "Stop watching an account"),
+                    BotCommand("watchlist", "Manage watched accounts"),
                     BotCommand("dump", "Open a public profile with action buttons"),
                     BotCommand("dl", "Download an Instagram link"),
                     BotCommand("profile", "Public profile info"),
-                    BotCommand("link", "Link Telegram Forum Group"),
                     BotCommand("logout", "Sign out of workspace"),
                 ]
                 await self.bot.set_my_commands(base_cmds)
@@ -259,29 +262,36 @@ class _TokenHub:
     def _view_home(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         slot = ws.get_attached_slot() or ws.get_active_slot()
         group_str = f"Linked (<code>{ws.tg_chat_id}</code>)" if ws.tg_chat_id else "Not linked"
+        bridge_state = "🟢 Enabled" if getattr(ws, "bridge_enabled", True) else "⏸ Paused"
         if slot:
-            badge = "🟢 Online" if slot.ig.logged_in else "🟠 Offline"
+            badge = "🟢 Logged in" if slot.ig.logged_in else "🟠 Needs login"
             ig_str = f"<code>@{slot.ig_username}</code> ({badge})"
         else:
-            ig_str = "None"
+            ig_str = "No account added yet"
 
         head = f"{notice}\n\n" if notice else ""
         text = (
-            f"{head}"
-            f"<b>Hyper Insta Bridge</b>\n\n"
+            f"{head}<b>Hyper Insta</b> · Workspace dashboard\n\n"
             f"👤 <b>Workspace:</b> <code>{ws.username}</code>\n"
-            f"💬 <b>Group:</b> {group_str}\n"
-            f"📸 <b>Bridged IG:</b> {ig_str}"
+            f"📸 <b>Instagram:</b> {ig_str}\n"
+            f"🔁 <b>DM bridge:</b> {bridge_state}\n"
+            f"💬 <b>Telegram group:</b> {group_str}\n\n"
+            "<i>Forward Instagram DMs to Telegram forum topics, manage multiple accounts, "
+            "watch public-account updates, and download Instagram media. Use Settings to control routing.</i>"
         )
         count = len(ws.slots)
         rows = [
             [
                 InlineKeyboardButton(f"📸 Accounts ({count})", callback_data="nav:accounts"),
-                InlineKeyboardButton("➕ Add IG", callback_data="nav:add_ig"),
+                InlineKeyboardButton("➕ Add Instagram", callback_data="nav:add_ig"),
+            ],
+            [
+                InlineKeyboardButton("⚙️ Settings", callback_data="nav:settings"),
+                InlineKeyboardButton("👁 Watchlist", callback_data="nav:watch"),
             ],
             [
                 InlineKeyboardButton("📊 Status", callback_data="nav:status"),
-                InlineKeyboardButton("🔗 Link Group", callback_data="nav:group"),
+                InlineKeyboardButton("💬 Group Routing", callback_data="nav:group"),
             ],
             [
                 InlineKeyboardButton("🔄 Refresh", callback_data="nav:home"),
@@ -410,13 +420,67 @@ class _TokenHub:
         else:
             lines.append("📸 <b>Attached IG:</b> None")
 
+        enabled = bool(getattr(ws, "bridge_enabled", True))
+        lines.append(f"🔁 <b>DM bridge:</b> {'Enabled' if enabled else 'Paused'}")
         rows = [
             [
                 InlineKeyboardButton("🔄 Refresh", callback_data="nav:status"),
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
-            ]
+                InlineKeyboardButton("⚙️ Settings", callback_data="nav:settings"),
+            ],
+            [InlineKeyboardButton("⬅️ Dashboard", callback_data="nav:home")],
         ]
         return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+    def _view_settings(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        slot = ws.get_attached_slot() or ws.get_active_slot()
+        enabled = bool(getattr(ws, "bridge_enabled", True))
+        group = f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "Not configured"
+        attached = f"@{slot.ig_username}" if slot else "No account selected"
+        rt = "ON" if slot and slot.cfg.realtime else "OFF"
+        fbns = "ON" if slot and slot.cfg.fbns else "OFF"
+        head = f"{notice}\n\n" if notice else ""
+        text = (
+            f"{head}<b>⚙️ Settings &amp; Routing</b>\n\n"
+            f"DM bridge: <b>{'🟢 Enabled' if enabled else '⏸ Paused'}</b>\n"
+            f"Attached account: <b>{attached}</b>\n"
+            f"Forum group: {group}\n"
+            f"Realtime MQTT: <b>{rt}</b> · FBNS: <b>{fbns}</b>\n\n"
+            "Choose the account that sends/receives bridged DMs. Pausing the bridge stops group routing; "
+            "it does not log Instagram out. Watch monitoring is configured separately from DM routing."
+        )
+        rows = [
+            [InlineKeyboardButton(
+                "⏸ Pause DM Bridge" if enabled else "▶️ Enable DM Bridge",
+                callback_data="settings:bridge",
+            )],
+            [InlineKeyboardButton("🔀 Choose Bridged Account", callback_data="settings:choose_account")],
+        ]
+        if slot:
+            rows.append([
+                InlineKeyboardButton(f"⚡ Realtime: {rt}", callback_data=f"settings:rt:{slot.ig_username}"),
+                InlineKeyboardButton(f"🔔 FBNS: {fbns}", callback_data=f"settings:fbns:{slot.ig_username}"),
+            ])
+        rows.extend([
+            [InlineKeyboardButton("💬 Configure Forum Group", callback_data="nav:group")],
+            [InlineKeyboardButton("👁 Watchlist", callback_data="nav:watch"),
+             InlineKeyboardButton("📸 Manage Accounts", callback_data="nav:accounts")],
+            [InlineKeyboardButton("⬅️ Dashboard", callback_data="nav:home")],
+        ])
+        return text, InlineKeyboardMarkup(rows)
+
+    def _view_settings_accounts(self, ws) -> tuple[str, InlineKeyboardMarkup]:
+        text = "<b>🔀 Choose Bridged Account</b>\n\nSelect one Instagram account for the Telegram DM bridge. Selecting it enables the bridge."
+        rows: list[list[InlineKeyboardButton]] = []
+        for ig_u, slot in ws.slots.items():
+            mark = "✅ " if ig_u == ws.bridged_ig and getattr(ws, "bridge_enabled", True) else ""
+            state = "🟢" if slot.ig.logged_in else "🟠"
+            rows.append([InlineKeyboardButton(
+                f"{mark}{state} @{ig_u}",
+                callback_data=f"settings:attach:{ig_u}",
+            )])
+        rows.append([InlineKeyboardButton("➕ Add Instagram", callback_data="nav:add_ig"),
+                     InlineKeyboardButton("⬅️ Settings", callback_data="nav:settings")])
+        return text, InlineKeyboardMarkup(rows)
 
     def _view_group(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         head = f"{notice}\n\n" if notice else ""
@@ -426,7 +490,7 @@ class _TokenHub:
             f"<b>Link Telegram Forum Group</b>\n\n"
             f"Current Group: {group_str}\n\n"
             f"1. Add @{self.bot_username} as an <b>Admin</b> in your Forum Group (enable <i>Manage Topics</i>).\n"
-            f"2. Type <code>/link</code> inside the group, or tap below to enter the Group ID."
+            f"2. Tap <b>Enter Group ID</b> here. Alternatively, an admin can still use <code>/link</code> inside the group."
         )
         rows = [
             [
@@ -512,6 +576,20 @@ class _TokenHub:
                 await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
+            if data == "nav:settings":
+                text, markup = self._view_settings(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "nav:watch":
+                slot = ws.get_attached_slot() or ws.get_active_slot()
+                if slot:
+                    await slot.bridge._handle_command("watchlist", [], update)
+                else:
+                    text, markup = self._view_add_ig("Add and log in to an Instagram account before using Watch.")
+                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
             if data == "nav:accounts":
                 text, markup = self._view_accounts(ws)
                 await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
@@ -529,6 +607,45 @@ class _TokenHub:
 
             if data == "nav:group":
                 text, markup = self._view_group(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "settings:choose_account":
+                text, markup = self._view_settings_accounts(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "settings:bridge":
+                await ws.set_bridge_enabled(not bool(getattr(ws, "bridge_enabled", True)))
+                text, markup = self._view_settings(ws, "Bridge updated.")
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data.startswith("settings:attach:"):
+                ig_u = sanitize_username(data.split(":", 2)[2])
+                try:
+                    await ws.attach_account(ig_u)
+                    text, markup = self._view_settings(ws, f"Attached @{ig_u} to the DM bridge.")
+                except Exception as e:
+                    text, markup = self._view_settings(ws, f"Could not attach account: {e}")
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data.startswith("settings:rt:"):
+                ig_u = sanitize_username(data.split(":", 2)[2])
+                slot = ws.slots.get(ig_u)
+                if slot:
+                    await slot.apply_config({"realtime": not slot.cfg.realtime})
+                text, markup = self._view_settings(ws, "Realtime MQTT setting updated.")
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data.startswith("settings:fbns:"):
+                ig_u = sanitize_username(data.split(":", 2)[2])
+                slot = ws.slots.get(ig_u)
+                if slot:
+                    await slot.apply_config({"fbns": not slot.cfg.fbns})
+                text, markup = self._view_settings(ws, "FBNS setting updated.")
                 await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
@@ -904,6 +1021,11 @@ class _TokenHub:
 
                 if cmd_name == "accounts":
                     v_txt, markup = self._view_accounts(ws)
+                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                    return
+
+                if cmd_name in ("settings", "config"):
+                    v_txt, markup = self._view_settings(ws)
                     await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
                     return
 

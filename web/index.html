@@ -656,6 +656,7 @@
 
       <nav class="pill-nav" id="top-pill-nav" style="display: none;">
         <a href="#sec-overview" class="active" onclick="setActiveNav(this)">Overview</a>
+        <a href="#sec-settings" onclick="setActiveNav(this)">Settings</a>
         <a href="#sec-auth" onclick="setActiveNav(this)">Authentication</a>
         <a href="#sec-telegram" onclick="setActiveNav(this)">Telegram &amp; Topics</a>
         <a href="#sec-logs" onclick="setActiveNav(this)">Live Console</a>
@@ -875,6 +876,58 @@
           <div class="kpi-footer" style="margin-top: 14px;">
             <span id="bot-dm-hint">Manage directly in Telegram Bot with <code class="mono">/start</code></span>
             <span class="mono" id="bridged-account-pill">Bridge: None</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Workspace Settings: bridge control, routing account and account management -->
+      <section id="sec-settings" class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Workspace Settings</h2>
+            <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+              Control DM bridge routing, pick the Instagram account attached to Telegram, and manage saved accounts.
+            </div>
+          </div>
+          <span id="settings-bridge-status" class="text-warn" style="font-size: 12px; font-weight: 700;">Bridge status unknown</span>
+        </div>
+
+        <div class="form-2col">
+          <div class="card" style="padding: 16px; gap: 14px;">
+            <div>
+              <div style="font-size: 13px; font-weight: 700; margin-bottom: 5px;">DM Bridge</div>
+              <div style="font-size: 12px; color: var(--text-secondary);">
+                Pause message forwarding without logging out or deleting the Instagram session.
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+              <label style="margin: 0;">Enable Instagram ↔ Telegram routing</label>
+              <input type="checkbox" class="switch" id="sw-bridge" onchange="toggleBridge(this.checked)" disabled />
+            </div>
+            <div id="settings-bridge-hint" style="font-size: 11.5px; color: var(--text-muted);">
+              Add an Instagram account to enable the bridge.
+            </div>
+            <div class="field" style="margin-bottom: 0;">
+              <label>Instagram account for the DM bridge</label>
+              <select id="bridge-account-select" disabled>
+                <option value="">Add an Instagram account first</option>
+              </select>
+            </div>
+            <button id="btn-bridge-attach" class="primary" onclick="attachBridgeSelectedAccount()" disabled>Use selected account</button>
+            <button onclick="document.getElementById('sec-telegram').scrollIntoView({behavior:'smooth'})">Configure Telegram group &amp; bot</button>
+          </div>
+
+          <div class="card" style="padding: 16px; gap: 12px;">
+            <div>
+              <div style="font-size: 13px; font-weight: 700; margin-bottom: 5px;">Instagram Accounts</div>
+              <div style="font-size: 12px; color: var(--text-secondary);">
+                View login state, choose the bridged account, or open an account's session controls.
+              </div>
+            </div>
+            <div id="settings-account-list" class="account-list" style="max-height: 260px;">
+              <div style="font-size: 12px; color: var(--text-muted);">No accounts loaded.</div>
+            </div>
+            <button onclick="selectIgAccount('__NEW__')">＋ Add another account</button>
           </div>
         </div>
       </section>
@@ -1236,6 +1289,50 @@
           activeIg = accounts[0] ? accounts[0].ig_username : '__NEW__';
         }
 
+        // Keep the dedicated Settings panel in sync with saved workspace state.
+        const bridgeEnabled = st.bridge_enabled !== false;
+        const bridgeSwitch = document.getElementById('sw-bridge');
+        bridgeSwitch.checked = bridgeEnabled;
+        bridgeSwitch.disabled = accounts.length === 0;
+        const bridgeStatus = document.getElementById('settings-bridge-status');
+        bridgeStatus.textContent = bridgeEnabled ? 'Bridge enabled' : 'Bridge paused';
+        bridgeStatus.className = bridgeEnabled ? 'text-ok' : 'text-warn';
+        document.getElementById('settings-bridge-hint').textContent =
+          !accounts.length
+            ? 'Add an Instagram account to enable routing.'
+            : (!st.tg_chat_id
+                ? 'Choose an account, then configure the Telegram bot and Forum Group ID below.'
+                : (!bridgeEnabled
+                ? 'Forwarding is paused. Your saved sessions remain connected.'
+                : (st.tg_running ? 'Routing is connected for the selected account.' : 'Bridge is enabled but not connected. Check the bot token, group ID and group permissions.')));
+
+        const bridgeSelect = document.getElementById('bridge-account-select');
+        bridgeSelect.innerHTML = accounts.length
+          ? accounts.map(a => '<option value="' + escapeHtml(a.ig_username) + '">' + escapeHtml(a.ig_username) +
+              (a.ig_username === st.bridged_ig ? ' (bridged)' : '') +
+              (a.ig_logged_in ? ' · online' : ' · offline') + '</option>').join('')
+          : '<option value="">Add an Instagram account first</option>';
+        bridgeSelect.value = accounts.some(a => a.ig_username === st.bridged_ig) ? st.bridged_ig : (accounts[0] ? accounts[0].ig_username : '');
+        bridgeSelect.disabled = accounts.length === 0;
+        document.getElementById('btn-bridge-attach').disabled =
+          !bridgeSelect.value || (bridgeSelect.value === st.bridged_ig && bridgeEnabled);
+
+        const settingsListEl = document.getElementById('settings-account-list');
+        settingsListEl.innerHTML = accounts.length ? accounts.map(a => {
+          const isBridged = a.ig_username === st.bridged_ig;
+          return '<div class="account-row" style="cursor: default;">' +
+            '<div><div class="mono" style="font-weight: 700; font-size: 12.5px;">@' + escapeHtml(a.ig_username) + '</div>' +
+            '<div style="font-size: 11px; color: var(--text-secondary);"><span class="' + (a.ig_logged_in ? 'text-ok' : 'text-warn') + '">' +
+            (a.ig_logged_in ? 'Logged in' : 'Needs login') + '</span> · ' + a.linked_topics +
+            ' topics' + (isBridged ? ' · <span class="text-ok">Bridge account</span>' : '') + '</div></div>' +
+            '<div style="display: flex; align-items: center; gap: 5px;">' +
+            (isBridged && bridgeEnabled
+              ? '<span class="text-ok mono" style="font-size: 10.5px;">Active</span>'
+              : '<button onclick="event.stopPropagation(); attachSpecificAccount(\'' + escapeHtml(a.ig_username) + '\')" style="padding: 4px 8px; font-size: 10.5px;">Route</button>') +
+            '<button onclick="event.stopPropagation(); manageSettingsAccount(\'' + escapeHtml(a.ig_username) + '\')" style="padding: 4px 8px; font-size: 10.5px;">Manage</button>' +
+            '</div></div>';
+        }).join('') : '<div style="font-size: 12px; color: var(--text-muted); padding: 12px;">No Instagram accounts yet. Use “Add another account” to begin.</div>';
+
         const onlineCount = accounts.filter(a => a.ig_logged_in).length;
         document.getElementById('matrix-subtitle').textContent =
           `${accounts.length} account(s) in workspace · ${onlineCount} logged in`;
@@ -1318,8 +1415,10 @@
           document.getElementById('kpi-ig-method').textContent = slot.login_method || 'none';
           document.getElementById('kpi-ig-handle').textContent = '@' + slot.ig_username;
 
-          document.getElementById('kpi-bridge-state').textContent = slot.attached_to_bridge ? 'Attached' : 'Standby';
-          document.getElementById('kpi-bridge-state').className = 'kpi-value tabular ' + (slot.attached_to_bridge ? 'text-ok' : '');
+          document.getElementById('kpi-bridge-state').textContent =
+            !bridgeEnabled ? 'Paused' : (slot.attached_to_bridge ? 'Attached' : 'Standby');
+          document.getElementById('kpi-bridge-state').className =
+            'kpi-value tabular ' + (bridgeEnabled && slot.attached_to_bridge ? 'text-ok' : '');
           document.getElementById('kpi-bridge-bot').textContent = st.tg_bot_username ? ('@' + st.tg_bot_username) : (st.tg_running ? 'Active' : 'Check Token');
           document.getElementById('kpi-bridge-group').textContent = st.tg_chat_id ? `Group: ${st.tg_chat_id}` : 'Group: unset';
 
@@ -1400,6 +1499,33 @@
       } catch (e) {
         console.error(e);
       }
+    }
+
+    async function toggleBridge(enabled) {
+      if (!currentUser || !authToken) return;
+      const feedback = document.getElementById('settings-bridge-hint');
+      feedback.textContent = enabled ? 'Enabling bridge...' : 'Pausing bridge...';
+      try {
+        await api('/api/users/' + encodeURIComponent(currentUser) + '/telegram/bridge', {
+          method: 'POST',
+          body: JSON.stringify({ enabled: Boolean(enabled) })
+        });
+        await refreshState();
+      } catch (e) {
+        feedback.textContent = e.message;
+        document.getElementById('sw-bridge').checked = !enabled;
+      }
+    }
+
+    async function attachBridgeSelectedAccount() {
+      const igName = document.getElementById('bridge-account-select').value;
+      if (!igName) return;
+      await attachSpecificAccount(igName);
+    }
+
+    function manageSettingsAccount(igName) {
+      selectIgAccount(igName);
+      document.getElementById('sec-auth').scrollIntoView({ behavior: 'smooth' });
     }
 
     async function attachCurrentToBridge() {
