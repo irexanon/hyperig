@@ -15,17 +15,69 @@ up, every POLL_INTERVAL when it is not), and a message can never be delivered tw
 goes through InstagramClient's per-thread cursor.
 """
 import asyncio
+import base64
 import json
 import random
 import select
+import socket
 import threading
 import time
 from typing import Any, Callable
+from urllib.parse import unquote, urlsplit
+
+from instagrapi.realtime.mqttot import SocketMQTToTTransport
 
 from core.auth import describe_error
 from utils.logger import get_logger
 
 log = get_logger("realtime")
+
+_orig_mqtt_proxy_conn = SocketMQTToTTransport._create_proxy_connection
+
+
+def _rfc_http_proxy_connection(self):
+    """PySocks sends lowercase 'Proxy-Authorization: basic' and resolves hostnames to raw IPs for HTTP proxies,
+    which causes Squid/Webshare proxies to reject the tunnel with '407: Proxy Authentication Required'.
+    Use a standard HTTP CONNECT tunnel with 'Proxy-Authorization: Basic' for http/https proxies."""
+    proxy = (self.proxy or "").strip()
+    if "://" not in proxy:
+        proxy = f"http://{proxy}"
+    parsed = urlsplit(proxy)
+    if parsed.scheme in ("http", "https"):
+        if not parsed.hostname or parsed.port is None:
+            raise ValueError(f"Unsupported realtime proxy URL: {self.proxy}")
+        raw = socket.create_connection((parsed.hostname, parsed.port), timeout=self.timeout)
+        lines = [
+            f"CONNECT {self.host}:{self.port} HTTP/1.1",
+            f"Host: {self.host}:{self.port}",
+            "Proxy-Connection: Keep-Alive",
+        ]
+        if parsed.username is not None or parsed.password is not None:
+            user = unquote(parsed.username or "")
+            pw = unquote(parsed.password or "")
+            token = base64.b64encode(f"{user}:{pw}".encode("utf-8")).decode("ascii")
+            lines.append(f"Proxy-Authorization: Basic {token}")
+        raw.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("utf-8"))
+        resp = bytearray()
+        while b"\r\n\r\n" not in resp:
+            ch = raw.recv(1)
+            if not ch:
+                raw.close()
+                raise ConnectionError("HTTP proxy closed connection during CONNECT")
+            resp.extend(ch)
+            if len(resp) > 16384:
+                raw.close()
+                raise ConnectionError("HTTP proxy response header too large")
+        status_line = resp.split(b"\r\n", 1)[0].decode("latin1", errors="replace")
+        parts = status_line.split(" ", 2)
+        if len(parts) < 2 or not parts[0].startswith("HTTP/") or int(parts[1]) != 200:
+            raw.close()
+            raise ConnectionError(f"HTTP proxy CONNECT failed: {status_line}")
+        return raw
+    return _orig_mqtt_proxy_conn(self)
+
+
+SocketMQTToTTransport._create_proxy_connection = _rfc_http_proxy_connection
 
 REALTIME_PING = 15      # the MQTT keep-alive instagrapi announces is 20s
 FBNS_PING = 45          # FBNS announces 60s

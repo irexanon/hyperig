@@ -229,6 +229,8 @@ class InstagramClient:
         if new_cfg.ig_proxy != getattr(self.cl, "proxy", None):
             try:
                 self.cl.set_proxy(new_cfg.ig_proxy)
+                if not new_cfg.ig_proxy:
+                    self.cl.proxy = None
             except Exception:
                 pass
         await self.realtime.reconfigure(new_cfg)
