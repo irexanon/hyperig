@@ -20,6 +20,8 @@ class BaseModule:
 
     name = "base"
     description = ""
+    toggleable = False  # True: can be switched on/off in Settings -> Features
+    label = ""          # short name shown in Settings
 
     def __init__(self, ctx):
         self.ctx = ctx
@@ -37,6 +39,11 @@ class BaseModule:
 
     async def on_stop(self) -> None:
         """Called on shutdown (cancel background tasks here)."""
+
+    async def on_text(self, text: str, update) -> bool:
+        """A plain (non-command) message in the private chat. Return True if this module used it
+        (for example, the username it asked you to type). Called before pasted links are looked at."""
+        return False
 
     async def process(self, message):
         """Called for every incoming Instagram message before it goes to Telegram.

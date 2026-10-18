@@ -77,16 +77,28 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 | `/posts <user> [n]`, `/reels <user> [n]` | latest posts (1-20) or reels (1-10) |
 | `/stories <user>`, `/highlights <user>` | current stories, or a button list of highlights |
 
-| `/watch <user> [posts\|stories\|all]` | watch a public account for new posts, reels and stories |
-| `/unwatch <user>`, `/watchlist` | stop watching; list with remove / check-now buttons |
+| `/watch <user> [posts] [stories] [profile] [highlights] [edits] [engagement] [everything]` | watch a public account (no options = posts + stories) |
+| `/unwatch <user>`, `/watchlist` | stop watching; the watchlist is a management screen (same as Settings -> Watchlist) |
 
-**Watcher** (`modules/watcher.py`): up to 10 public accounts, checked about every 10 minutes with random
-jitter and a pause between accounts. Existing posts and stories are recorded when you add an account, so you
-only get what appears afterwards. Seen items are saved, so restarts never repeat or lose anything. A rate limit
-from Instagram pauses all checks for 15 minutes and tells you once; an account that turns private is removed.
-The current watcher does not guarantee detection of every Instagram action: likes, DMs, follows, comments,
-edits and deletions are not all exposed as a reliable event stream. Profile-change snapshots, engagement
-snapshots and highlight-change checks are possible future opt-in watch modes, subject to API availability.
+**Watcher** (`modules/watcher.py`): up to 10 public accounts, each on its own schedule with jitter and a pause
+between accounts. Per account you can switch on: new posts/reels, stories, profile changes (name, bio, link,
+category, verified badge, picture), highlights (new ones, new items), edits and removals (caption edits, posts
+that disappeared), and milestones (likes/comments on recent posts, follower counts). Filters: only posts or only
+reels, caption keywords. Per account: pause, own interval. What exists when you add an account or switch a
+feature on is recorded silently, so you only get what happens afterwards. Seen items are saved, so restarts
+never repeat or lose anything. A rate limit pauses all checks for 15 minutes and tells you once; an account that
+turns private is removed. Alerts can go to this chat or the forum group, be held during quiet hours, or be
+batched into a daily digest.
+
+Only what Instagram shows publicly about public accounts is watched. Who someone follows, what they like or
+comment on elsewhere, online status and activity-time patterns are not exposed and are not tracked.
+
+## Settings
+
+`/settings` (or the Settings button) has the bridge controls plus: **Watchlist**, **Features** (switch the
+profile tools, link downloader and watcher on or off), **Downloads** (largest file, audio button),
+**Notifications** (where alerts go, quiet hours, daily digest, timezone), **Safety** (watcher pace: safe /
+normal / fast) and **Health** (login state, last watcher pass, recent errors). These are saved per Instagram account.
 
 ## Instagram link downloader
 

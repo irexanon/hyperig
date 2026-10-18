@@ -48,6 +48,28 @@ class ModuleManager:
     def all_callbacks(self) -> dict[str, tuple[object, BaseModule]]:
         return self._callbacks
 
+    def get(self, name: str):
+        return next((m for m in self.modules if m.name == name), None)
+
+    def is_enabled(self, module: BaseModule) -> bool:
+        """Modules marked toggleable can be switched off in Settings; everything else is always on."""
+        if not getattr(module, "toggleable", False):
+            return True
+        prefs = getattr(self.ctx, "prefs", None)
+        return prefs.feature_on(module.name) if prefs else True
+
+    async def handle_text(self, text: str, update) -> bool:
+        """Offer a plain private-chat message to every enabled module; the first one that uses it wins."""
+        for module in self.modules:
+            if not self.is_enabled(module):
+                continue
+            try:
+                if await module.on_text(text, update):
+                    return True
+            except Exception:
+                log.exception("Module %s failed on a text message", module.name)
+        return False
+
     async def start_all(self) -> None:
         for module in self.modules:
             try:

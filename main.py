@@ -27,6 +27,7 @@ from core.context import AppContext
 from core.instagram import InstagramClient
 from core.message_handler import MessageHandler
 from core.module_manager import ModuleManager
+from utils.prefs import Prefs
 from tg.bridge import TelegramBridge, _TokenHub
 from utils.db import (
     ScopedStore,
@@ -71,7 +72,7 @@ class InstagramSlot:
         self.ig = InstagramClient(self.cfg, self.store)
         self.bridge = TelegramBridge(self.cfg, self.store, username=user_id)
         self.bridge.attached = attached_to_bridge
-        self.ctx = AppContext(cfg=self.cfg, ig=self.ig, store=self.store, bridge=self.bridge)
+        self.ctx = AppContext(cfg=self.cfg, ig=self.ig, store=self.store, bridge=self.bridge, prefs=Prefs(self.store))
         self.modules = ModuleManager(self.ctx)
         self.ctx.modules = self.modules
         self.modules.load_modules()
@@ -93,6 +94,7 @@ class InstagramSlot:
     async def start(self) -> None:
         tok = current_user_var.set(self.user_id)
         try:
+            await self.ctx.prefs.load()
             await self.bridge.start(self.ig, self.modules)
             await self.ig.restore_saved_session()
             self._poller_task = asyncio.create_task(self._run_poller())

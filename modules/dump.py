@@ -54,6 +54,8 @@ def _btn(text: str, act: str, arg: str) -> InlineKeyboardButton:
 
 class DumpModule(BaseModule):
     name = "dump"
+    toggleable = True
+    label = "Profile tools (/dump, /profile, /posts ...)"
     description = "Public profile card with action buttons, plus profile commands"
 
     def __init__(self, ctx):

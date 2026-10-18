@@ -464,6 +464,11 @@ class _TokenHub:
             [InlineKeyboardButton("💬 Configure Forum Group", callback_data="nav:group")],
             [InlineKeyboardButton("👁 Watchlist", callback_data="nav:watch"),
              InlineKeyboardButton("📸 Manage Accounts", callback_data="nav:accounts")],
+            [InlineKeyboardButton("🧩 Features", callback_data="pn:ft"),
+             InlineKeyboardButton("📥 Downloads", callback_data="pn:dl")],
+            [InlineKeyboardButton("🔔 Notifications", callback_data="pn:nt"),
+             InlineKeyboardButton("🛡 Safety", callback_data="pn:sf"),
+             InlineKeyboardButton("🩺 Health", callback_data="pn:hl")],
             [InlineKeyboardButton("⬅️ Dashboard", callback_data="nav:home")],
         ])
         return text, InlineKeyboardMarkup(rows)
@@ -561,6 +566,9 @@ class _TokenHub:
                 found = slot.modules.all_callbacks().get(prefix) if slot else None
                 if not found:
                     return
+                if not slot.modules.is_enabled(found[1]):
+                    await query.message.reply_text("🚫 That feature is turned off. Turn it on in Settings → Features.")
+                    return
                 try:
                     await found[0](rest, query, context)
                 except Exception as e:
@@ -578,6 +586,13 @@ class _TokenHub:
 
             if data == "nav:settings":
                 text, markup = self._view_settings(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data.startswith("pn:"):
+                from tg import panel
+
+                text, markup = await panel.handle(ws, data)
                 await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
@@ -994,6 +1009,12 @@ class _TokenHub:
                     await self._show_panel(chat_id, user_id, v_txt, markup)
                     return
 
+            # 3.4. A module may be waiting for something you were asked to type (e.g. a username to watch).
+            if text and not text.startswith("/"):
+                slot = ws.get_attached_slot() or ws.get_active_slot()
+                if slot and await slot.modules.handle_text(text, update):
+                    return
+
             # 3.5. Pasted Instagram URL -> automatic download / profile card.
             # Keep this after the login/challenge conversational handlers above.
             if text and not text.startswith("/"):
@@ -1366,6 +1387,11 @@ class TelegramBridge:
             await update.effective_message.reply_text(f"Unknown command /{cmd_name}. Send /help or /panel.")
             return
         command, _mod = found
+        if not self.module_manager.is_enabled(_mod):
+            await update.effective_message.reply_text(
+                f"🚫 /{cmd_name} is turned off. Turn it on in Settings → Features."
+            )
+            return
         try:
             if command.takes_update:
                 await command.handler(args, update)  # the command sends its own reply

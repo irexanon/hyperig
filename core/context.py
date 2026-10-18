@@ -12,4 +12,5 @@ class AppContext:
     store: Any
     bridge: Any = None
     modules: Any = None
+    prefs: Any = None
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
