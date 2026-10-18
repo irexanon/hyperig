@@ -881,7 +881,7 @@ class _TokenHub:
             # Keep this after the login/challenge conversational handlers above.
             if text and not text.startswith("/"):
                 link_match = re.search(
-                    r"(?i)(?:https?://)?(?:www\\.|m\\.)?(?:instagram\\.com|instagr\\.am)/[^\\s<>]+",
+                    r"(?i)(?:https?://)?(?:www\.|m\.)?(?:instagram\.com|instagr\.am)/[^\s<>]+",
                     text,
                 )
                 if link_match:
