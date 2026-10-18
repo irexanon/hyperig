@@ -371,6 +371,7 @@ class UserWorkspace:
         self.slots: dict[str, InstagramSlot] = {}
         self.active_ig: str = ""
         self.bridged_ig: str = ""
+        self.bridge_enabled: bool = True
         self._lock = asyncio.Lock()
 
     def get_attached_slot(self) -> InstagramSlot | None:
@@ -492,6 +493,7 @@ class UserWorkspace:
             account_names = [sanitize_username(a) for a in (profile.get("accounts") or []) if sanitize_username(a)]
             self.active_ig = sanitize_username(profile.get("active_account") or "")
             self.bridged_ig = sanitize_username(profile.get("bridged_account") or self.active_ig or "")
+            self.bridge_enabled = bool(profile.get("bridge_enabled", True))
             if not self.bridged_ig and account_names:
                 self.bridged_ig = account_names[0]
 
@@ -517,6 +519,7 @@ class UserWorkspace:
                 "accounts": list(self.slots.keys()),
                 "active_account": self.active_ig,
                 "bridged_account": self.bridged_ig,
+                "bridge_enabled": self.bridge_enabled,
             },
         )
 
@@ -538,7 +541,7 @@ class UserWorkspace:
             saved_cfg["tg_token"] = self.tg_token
         if not self.bridged_ig:
             self.bridged_ig = ig_username
-        is_attached = (ig_username == self.bridged_ig)
+        is_attached = (ig_username == self.bridged_ig and self.bridge_enabled)
         slot = InstagramSlot(
             self.username,
             ig_username,
@@ -570,6 +573,7 @@ class UserWorkspace:
             slot = await self.ensure_slot(raw_ig_username)
             self.bridged_ig = slot.ig_username
             self.active_ig = slot.ig_username
+            self.bridge_enabled = True
             for uname, s in self.slots.items():
                 await s.set_attached(uname == self.bridged_ig)
             await self._save_profile()
@@ -580,6 +584,26 @@ class UserWorkspace:
                 f"Attached @{self.bridged_ig} to the Telegram bridge.",
             )
             return slot
+        finally:
+            current_user_var.reset(tok)
+
+    async def set_bridge_enabled(self, enabled: bool) -> None:
+        """Enable or pause Instagram-to-Telegram DM bridging for this workspace."""
+        tok = current_user_var.set(self.username)
+        try:
+            self.bridge_enabled = bool(enabled)
+            if self.bridge_enabled and not self.bridged_ig and self.slots:
+                self.bridged_ig = self.active_ig or next(iter(self.slots))
+            for uname, slot in self.slots.items():
+                await slot.set_attached(self.bridge_enabled and uname == self.bridged_ig)
+            await self._save_profile()
+            state = "enabled" if self.bridge_enabled else "paused"
+            add_user_log(
+                self.username,
+                "INFO",
+                "bridge",
+                f"Instagram DM bridge {state}.",
+            )
         finally:
             current_user_var.reset(tok)
 
@@ -598,7 +622,7 @@ class UserWorkspace:
             if self.bridged_ig == ig_u:
                 self.bridged_ig = self.active_ig
                 if self.bridged_ig and self.bridged_ig in self.slots:
-                    await self.slots[self.bridged_ig].set_attached(True)
+                    await self.slots[self.bridged_ig].set_attached(self.bridge_enabled)
             await self._save_profile()
 
     async def update_telegram(self, payload: dict) -> None:
@@ -670,6 +694,7 @@ class UserWorkspace:
             "tg_error": tg_err,
             "active_ig": self.active_ig,
             "bridged_ig": self.bridged_ig,
+            "bridge_enabled": self.bridge_enabled,
             "accounts": accounts,
         }
 
