@@ -1289,6 +1289,48 @@
           activeIg = accounts[0] ? accounts[0].ig_username : '__NEW__';
         }
 
+        // Keep the dedicated Settings panel in sync with saved workspace state.
+        const bridgeEnabled = st.bridge_enabled !== false;
+        const bridgeSwitch = document.getElementById('sw-bridge');
+        bridgeSwitch.checked = bridgeEnabled;
+        bridgeSwitch.disabled = accounts.length === 0;
+        const bridgeStatus = document.getElementById('settings-bridge-status');
+        bridgeStatus.textContent = bridgeEnabled ? 'Bridge enabled' : 'Bridge paused';
+        bridgeStatus.className = bridgeEnabled ? 'text-ok' : 'text-warn';
+        document.getElementById('settings-bridge-hint').textContent =
+          !accounts.length
+            ? 'Add an Instagram account to enable routing.'
+            : (!st.tg_chat_id
+                ? 'Choose an account, then configure the Telegram bot and Forum Group ID below.'
+                : (bridgeEnabled ? 'Routing is enabled for the selected bridged account.' : 'Forwarding is paused. Your saved sessions remain connected.'));
+
+        const bridgeSelect = document.getElementById('bridge-account-select');
+        bridgeSelect.innerHTML = accounts.length
+          ? accounts.map(a => '<option value="' + escapeHtml(a.ig_username) + '">' + escapeHtml(a.ig_username) +
+              (a.ig_username === st.bridged_ig ? ' (bridged)' : '') +
+              (a.ig_logged_in ? ' · online' : ' · offline') + '</option>').join('')
+          : '<option value="">Add an Instagram account first</option>';
+        bridgeSelect.value = accounts.some(a => a.ig_username === st.bridged_ig) ? st.bridged_ig : (accounts[0] ? accounts[0].ig_username : '');
+        bridgeSelect.disabled = accounts.length === 0;
+        document.getElementById('btn-bridge-attach').disabled =
+          !bridgeSelect.value || (bridgeSelect.value === st.bridged_ig && bridgeEnabled);
+
+        const settingsListEl = document.getElementById('settings-account-list');
+        settingsListEl.innerHTML = accounts.length ? accounts.map(a => {
+          const isBridged = a.ig_username === st.bridged_ig;
+          return '<div class="account-row" style="cursor: default;">' +
+            '<div><div class="mono" style="font-weight: 700; font-size: 12.5px;">@' + escapeHtml(a.ig_username) + '</div>' +
+            '<div style="font-size: 11px; color: var(--text-secondary);"><span class="' + (a.ig_logged_in ? 'text-ok' : 'text-warn') + '">' +
+            (a.ig_logged_in ? 'Logged in' : 'Needs login') + '</span> · ' + a.linked_topics +
+            ' topics' + (isBridged ? ' · <span class="text-ok">Bridge account</span>' : '') + '</div></div>' +
+            '<div style="display: flex; align-items: center; gap: 5px;">' +
+            (isBridged && bridgeEnabled
+              ? '<span class="text-ok mono" style="font-size: 10.5px;">Active</span>'
+              : '<button onclick="event.stopPropagation(); attachSpecificAccount(\'' + escapeHtml(a.ig_username) + '\')" style="padding: 4px 8px; font-size: 10.5px;">Route</button>') +
+            '<button onclick="event.stopPropagation(); manageSettingsAccount(\'' + escapeHtml(a.ig_username) + '\')" style="padding: 4px 8px; font-size: 10.5px;">Manage</button>' +
+            '</div></div>';
+        }).join('') : '<div style="font-size: 12px; color: var(--text-muted); padding: 12px;">No Instagram accounts yet. Use “Add another account” to begin.</div>';
+
         const onlineCount = accounts.filter(a => a.ig_logged_in).length;
         document.getElementById('matrix-subtitle').textContent =
           `${accounts.length} account(s) in workspace · ${onlineCount} logged in`;
@@ -1371,8 +1413,10 @@
           document.getElementById('kpi-ig-method').textContent = slot.login_method || 'none';
           document.getElementById('kpi-ig-handle').textContent = '@' + slot.ig_username;
 
-          document.getElementById('kpi-bridge-state').textContent = slot.attached_to_bridge ? 'Attached' : 'Standby';
-          document.getElementById('kpi-bridge-state').className = 'kpi-value tabular ' + (slot.attached_to_bridge ? 'text-ok' : '');
+          document.getElementById('kpi-bridge-state').textContent =
+            !bridgeEnabled ? 'Paused' : (slot.attached_to_bridge ? 'Attached' : 'Standby');
+          document.getElementById('kpi-bridge-state').className =
+            'kpi-value tabular ' + (bridgeEnabled && slot.attached_to_bridge ? 'text-ok' : '');
           document.getElementById('kpi-bridge-bot').textContent = st.tg_bot_username ? ('@' + st.tg_bot_username) : (st.tg_running ? 'Active' : 'Check Token');
           document.getElementById('kpi-bridge-group').textContent = st.tg_chat_id ? `Group: ${st.tg_chat_id}` : 'Group: unset';
 
@@ -1453,6 +1497,33 @@
       } catch (e) {
         console.error(e);
       }
+    }
+
+    async function toggleBridge(enabled) {
+      if (!currentUser || !authToken) return;
+      const feedback = document.getElementById('settings-bridge-hint');
+      feedback.textContent = enabled ? 'Enabling bridge...' : 'Pausing bridge...';
+      try {
+        await api('/api/users/' + encodeURIComponent(currentUser) + '/telegram/bridge', {
+          method: 'POST',
+          body: JSON.stringify({ enabled: Boolean(enabled) })
+        });
+        await refreshState();
+      } catch (e) {
+        feedback.textContent = e.message;
+        document.getElementById('sw-bridge').checked = !enabled;
+      }
+    }
+
+    async function attachBridgeSelectedAccount() {
+      const igName = document.getElementById('bridge-account-select').value;
+      if (!igName) return;
+      await attachSpecificAccount(igName);
+    }
+
+    function manageSettingsAccount(igName) {
+      selectIgAccount(igName);
+      document.getElementById('sec-auth').scrollIntoView({ behavior: 'smooth' });
     }
 
     async function attachCurrentToBridge() {
