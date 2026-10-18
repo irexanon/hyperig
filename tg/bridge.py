@@ -10,6 +10,7 @@ NOTE: this package is called `tg`, not `telegram`, because a local folder named
 import asyncio
 import io
 import json
+import re
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -117,6 +118,7 @@ class _TokenHub:
                     BotCommand("accounts", "View & switch Instagram accounts"),
                     BotCommand("status", "Show connection status"),
                     BotCommand("dump", "Open a public profile with action buttons"),
+                    BotCommand("dl", "Download an Instagram link"),
                     BotCommand("profile", "Public profile info"),
                     BotCommand("link", "Link Telegram Forum Group"),
                     BotCommand("logout", "Sign out of workspace"),
@@ -874,6 +876,19 @@ class _TokenHub:
                     v_txt, markup = self._view_account_card(ws, slot.ig_username, notice=notice)
                     await self._show_panel(chat_id, user_id, v_txt, markup)
                     return
+
+            # 3.5. Pasted Instagram URL -> automatic download / profile card.
+            # Keep this after the login/challenge conversational handlers above.
+            if text and not text.startswith("/"):
+                link_match = re.search(
+                    r"(?i)(?:https?://)?(?:www\\.|m\\.)?(?:instagram\\.com|instagr\\.am)/[^\\s<>]+",
+                    text,
+                )
+                if link_match:
+                    slot = ws.get_attached_slot() or ws.get_active_slot()
+                    if slot:
+                        await slot.bridge._handle_command("dl", [link_match.group(0)], update)
+                        return
 
             # 4. Slash Commands
             if text.startswith("/"):
