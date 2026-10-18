@@ -69,6 +69,16 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 | `/code 123456` | answer a verification / 2FA prompt |
 | `/resetsession confirm` | forget session AND device, log in as a new device (last resort) |
 | `/logout confirm` | log out on Instagram and forget the session |
+| `/dump <user or link>` | profile card with buttons: posts, reels, stories, highlights, profile pic, JSON |
+| `/profile <user>` | detailed public profile info |
+| `/pfp <user>` | profile picture, full size |
+| `/posts <user> [n]`, `/reels <user> [n]` | latest posts (1-20) or reels (1-10) |
+| `/stories <user>`, `/highlights <user>` | current stories, or a button list of highlights |
+
+The profile tools (`modules/dump.py`) work on **public accounts only**; a private account just shows its
+public card. They never show or export phone numbers, e-mail addresses or street addresses. One job runs
+per chat at a time, with a short pause between items, to keep the logged-in account out of rate limits.
+Run them in the private chat with the bot.
 
 ## Realtime delivery (MQTT + FBNS)
 Both channels are instagrapi's own (`cl.realtime_*`, `cl.fbns_*`), enabled by default:

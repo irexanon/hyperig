@@ -116,6 +116,8 @@ class _TokenHub:
                     BotCommand("start", "Open main menu"),
                     BotCommand("accounts", "View & switch Instagram accounts"),
                     BotCommand("status", "Show connection status"),
+                    BotCommand("dump", "Open a public profile with action buttons"),
+                    BotCommand("profile", "Public profile info"),
                     BotCommand("link", "Link Telegram Forum Group"),
                     BotCommand("logout", "Sign out of workspace"),
                 ]
@@ -486,6 +488,23 @@ class _TokenHub:
 
         tok = current_user_var.set(ws.username)
         try:
+            # Buttons owned by a module ("m:<prefix>:<rest>"), e.g. the /dump menu.
+            if data.startswith("m:"):
+                prefix, _, rest = data[2:].partition(":")
+                slot = ws.get_attached_slot() or ws.get_active_slot()
+                found = slot.modules.all_callbacks().get(prefix) if slot else None
+                if not found:
+                    return
+                try:
+                    await found[0](rest, query, context)
+                except Exception as e:
+                    log.warning("Button handler %s failed: %s", prefix, e)
+                    try:
+                        await query.message.reply_text(f"❌ {type(e).__name__}: {e}")
+                    except TelegramError:
+                        pass
+                return
+
             if data == "nav:home":
                 text, markup = self._view_home(ws)
                 await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
@@ -1211,12 +1230,17 @@ class TelegramBridge:
             return
         command, _mod = found
         try:
-            reply = await command.handler(args)
+            if command.takes_update:
+                await command.handler(args, update)  # the command sends its own reply
+                reply = None
+            else:
+                reply = await command.handler(args)
         except Exception as e:
             log.warning("Command /%s failed: %s", cmd_name, e)
             reply = f"❌ {type(e).__name__}: {e}"
         message = update.effective_message
-        await message.reply_text(reply)
+        if reply:
+            await message.reply_text(reply)
         if command.sensitive:
             try:
                 await message.delete()
