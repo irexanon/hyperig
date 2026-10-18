@@ -30,6 +30,7 @@ from telegram.ext import (
     filters,
 )
 
+from core import osint_tools
 from utils import media as media_utils
 from utils.db import sanitize_username
 from utils.logger import add_user_log, current_user_var, get_logger
@@ -48,7 +49,10 @@ class _TokenHub:
     Handles:
     - Private DM onboarding (/start -> Register or Login to a User Workspace)
     - Private DM interactive control panel (Select/Attach IG account to bridge, Login IG via Password/Cookie,
-      Toggle Realtime & FBNS, Set Group Chat ID, Download Session JSON, Run Commands)
+      Toggle Realtime & FBNS, Set Group Chat ID, Download Session JSON)
+    - Auto-Detect Instagram Link Downloader (Reels, Posts, Carousels, Stories, Highlights, Profile Links)
+    - /dump & /profile Interactive OSINT & Profile DB Card with Manual Count / ALL selectors
+    - /watch Background & On-Demand OSINT Account / Story / Post Watcher
     - Forum Group topic routing for the attached Instagram account.
     """
 
@@ -114,6 +118,10 @@ class _TokenHub:
             try:
                 base_cmds = [
                     BotCommand("start", "Open main menu"),
+                    BotCommand("dump", "OSINT Dump & action menu (@username)"),
+                    BotCommand("profile", "Fetch profile data + DB history (@username)"),
+                    BotCommand("dl", "Download any Instagram link"),
+                    BotCommand("watch", "Manage OSINT & Story Watcher"),
                     BotCommand("accounts", "View & switch Instagram accounts"),
                     BotCommand("status", "Show connection status"),
                     BotCommand("dump", "Open a public profile with action buttons"),
@@ -150,6 +158,17 @@ class _TokenHub:
         for ws in mgr.workspaces.values():
             if ws.tg_admin_id and ws.tg_admin_id == tg_user_id:
                 return ws
+        return None
+
+    @staticmethod
+    def _get_logged_in_slot(ws):
+        """Return the attached or active logged-in InstagramSlot, or any logged-in slot in the workspace."""
+        for candidate in (ws.get_attached_slot(), ws.get_active_slot()):
+            if candidate and candidate.ig.logged_in:
+                return candidate
+        for s in ws.slots.values():
+            if s.ig.logged_in:
+                return s
         return None
 
     def _match_group_bridge(self, chat_id: int, topic_id: int | None, tg_user_id: int | None) -> "TelegramBridge | None":
@@ -238,6 +257,53 @@ class _TokenHub:
         except TelegramError:
             pass
 
+    async def _send_downloaded_files(
+        self,
+        chat_id: int,
+        files: list[Path],
+        caption: str = "",
+        reply_markup: InlineKeyboardMarkup | None = None,
+    ) -> int:
+        """Send a list of downloaded media files (photos/videos) to Telegram."""
+        sent_count = 0
+        total = len(files)
+        for idx, fpath in enumerate(files):
+            if not fpath or not fpath.exists():
+                continue
+            ext = fpath.suffix.lower()
+            cap = caption if idx == 0 else f"({idx + 1}/{total})"
+            rm = reply_markup if idx == total - 1 else None
+            try:
+                with open(fpath, "rb") as fp:
+                    if ext in (".mp4", ".mov", ".m4v", ".webm"):
+                        await self.bot.send_video(
+                            chat_id=chat_id,
+                            video=fp,
+                            caption=cap[:1024] if cap else None,
+                            parse_mode="HTML",
+                            reply_markup=rm,
+                        )
+                    elif ext in (".jpg", ".jpeg", ".png", ".webp"):
+                        await self.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=fp,
+                            caption=cap[:1024] if cap else None,
+                            parse_mode="HTML",
+                            reply_markup=rm,
+                        )
+                    else:
+                        await self.bot.send_document(
+                            chat_id=chat_id,
+                            document=fp,
+                            caption=cap[:1024] if cap else None,
+                            parse_mode="HTML",
+                            reply_markup=rm,
+                        )
+                sent_count += 1
+            except TelegramError as e:
+                log.warning("Failed sending media %s: %s", fpath.name, e)
+        return sent_count
+
     # ------------------------------------------------- Clean Menu Views
     def _view_welcome(self, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         head = f"{notice}\n\n" if notice else ""
@@ -269,13 +335,18 @@ class _TokenHub:
             f"<b>Hyper Insta Bridge</b>\n\n"
             f"👤 <b>Workspace:</b> <code>{ws.username}</code>\n"
             f"💬 <b>Group:</b> {group_str}\n"
-            f"📸 <b>Bridged IG:</b> {ig_str}"
+            f"📸 <b>Bridged IG:</b> {ig_str}\n\n"
+            f"<i>💡 Paste any Instagram link here to auto-download, or use Dump / Watcher below.</i>"
         )
         count = len(ws.slots)
         rows = [
             [
                 InlineKeyboardButton(f"📸 Accounts ({count})", callback_data="nav:accounts"),
                 InlineKeyboardButton("➕ Add IG", callback_data="nav:add_ig"),
+            ],
+            [
+                InlineKeyboardButton("🕵️ Dump / Profile", callback_data="nav:dump"),
+                InlineKeyboardButton("👁 OSINT Watcher", callback_data="nav:watcher"),
             ],
             [
                 InlineKeyboardButton("📊 Status", callback_data="nav:status"),
@@ -360,7 +431,10 @@ class _TokenHub:
                 InlineKeyboardButton("📥 Session .json", callback_data=f"acct:dl:{ig_u}"),
             ],
             [
+                InlineKeyboardButton("🕵️ My Profile Dump", callback_data=f"dump:open:{ig_u}"),
                 InlineKeyboardButton("🗑 Logout IG", callback_data=f"acct:logout:{ig_u}"),
+            ],
+            [
                 InlineKeyboardButton("⬅️ Back", callback_data="nav:accounts"),
             ],
         ]
@@ -433,6 +507,366 @@ class _TokenHub:
             ]
         ]
         return text, InlineKeyboardMarkup(rows)
+
+    # ------------------------------------------------- Dump / Profile DB / Watcher Views
+    @staticmethod
+    def _dump_card_markup(uname: str, is_watched: bool) -> InlineKeyboardMarkup:
+        watch_label = "🔕 Unwatch" if is_watched else "👁 Watch Account"
+        rows = [
+            [
+                InlineKeyboardButton("🖼 HD Avatar", callback_data=f"dump:avatar:{uname}"),
+                InlineKeyboardButton("🗄 Profile DB (.json)", callback_data=f"dump:dbjson:{uname}"),
+            ],
+            [
+                InlineKeyboardButton("📖 Active Stories", callback_data=f"dump:stories:{uname}"),
+                InlineKeyboardButton("✨ Highlights", callback_data=f"dump:hl:{uname}"),
+            ],
+            [
+                InlineKeyboardButton("📸 Posts", callback_data=f"dump:sel:posts:{uname}"),
+                InlineKeyboardButton("🎬 Reels", callback_data=f"dump:sel:reels:{uname}"),
+                InlineKeyboardButton("🏷 Tagged", callback_data=f"dump:sel:tagged:{uname}"),
+            ],
+            [
+                InlineKeyboardButton("👥 Followers", callback_data=f"dump:sel:followers:{uname}"),
+                InlineKeyboardButton("👣 Following", callback_data=f"dump:sel:following:{uname}"),
+            ],
+            [
+                InlineKeyboardButton(watch_label, callback_data=f"dump:watch:{uname}"),
+                InlineKeyboardButton("🔄 Rescan", callback_data=f"dump:open:{uname}"),
+            ],
+            [
+                InlineKeyboardButton("🗄 Saved Profiles DB", callback_data="nav:profile_db"),
+                InlineKeyboardButton("⬅️ Home", callback_data="nav:home"),
+            ],
+        ]
+        return InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def _view_count_selector(kind: str, uname: str) -> tuple[str, InlineKeyboardMarkup]:
+        labels = {
+            "posts": ("📸 Posts", [3, 5, 10, 25], "📦 Download ALL Posts"),
+            "reels": ("🎬 Reels", [3, 5, 10, 25], "📦 Download ALL Reels"),
+            "tagged": ("🏷 Tagged Media", [3, 5, 10, 25], "📦 Download ALL Tagged"),
+            "followers": ("👥 Followers CSV/JSON", [50, 100, 250], "📦 Export ALL Followers"),
+            "following": ("👣 Following CSV/JSON", [50, 100, 250], "📦 Export ALL Following"),
+        }
+        title, presets, all_label = labels.get(kind, ("📦 Items", [5, 10, 25], "📦 Download ALL"))
+        text = (
+            f"<b>{title} — @{uname}</b>\n\n"
+            f"Choose how many items to fetch, tap <b>🔢 Enter Custom Count</b> to type any number, or tap <b>{all_label}</b>:"
+        )
+        preset_row = [
+            InlineKeyboardButton(str(n), callback_data=f"dump:run:{kind}:{n}:{uname}")
+            for n in presets
+        ]
+        rows = [
+            preset_row,
+            [
+                InlineKeyboardButton("🔢 Enter Custom Count", callback_data=f"dump:custom:{kind}:{uname}"),
+                InlineKeyboardButton(all_label, callback_data=f"dump:run:{kind}:0:{uname}"),
+            ],
+            [
+                InlineKeyboardButton(f"⬅️ Back to @{uname}", callback_data=f"dump:open:{uname}"),
+            ],
+        ]
+        return text, InlineKeyboardMarkup(rows)
+
+    async def _view_watcher(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        targets = await osint_tools.get_watched_targets(ws)
+        head = f"{notice}\n\n" if notice else ""
+        if not targets:
+            text = (
+                f"{head}"
+                "<b>👁 OSINT &amp; Story Watcher</b>\n\n"
+                "No accounts are being watched yet.\n"
+                "Add a target to monitor profile changes (bio, username, followers, privacy) and auto-grab new Stories &amp; Posts."
+            )
+        else:
+            lines = [
+                f"{head}<b>👁 OSINT &amp; Story Watcher ({len(targets)})</b>",
+                "Tap any watched account to open its OSINT Dump Card:",
+                "",
+            ]
+            for u, meta in targets.items():
+                last_c = (meta.get("last_checked") or "Not scanned yet")[:16].replace("T", " ")
+                s_cnt = len(meta.get("seen_stories") or [])
+                lines.append(f"• <b>@{u}</b> — Last check: <code>{last_c}</code> ({s_cnt} stories tracked)")
+            text = "\n".join(lines)
+
+        rows: list[list[InlineKeyboardButton]] = []
+        for u in list(targets.keys())[:10]:
+            rows.append(
+                [
+                    InlineKeyboardButton(f"🕵️ @{u}", callback_data=f"dump:open:{u}"),
+                    InlineKeyboardButton("🗑 Unwatch", callback_data=f"watch:rm:{u}"),
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton("➕ Add Target", callback_data="watch:add"),
+                InlineKeyboardButton("⚡ Scan All Now", callback_data="watch:scan_all"),
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton("🗄 Profile DB", callback_data="nav:profile_db"),
+                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+            ]
+        )
+        return text, InlineKeyboardMarkup(rows)
+
+    async def _view_profile_db(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        db_map: dict = await ws.store.get("profile_db", {}) or {}
+        head = f"{notice}\n\n" if notice else ""
+        if not db_map:
+            text = (
+                f"{head}"
+                "<b>🗄 Saved Profile Database</b>\n\n"
+                "No profiles saved in database yet. Use <code>/profile @username</code> or <code>/dump @username</code> to scan and store profiles."
+            )
+            rows = [
+                [
+                    InlineKeyboardButton("🕵️ Scan Profile", callback_data="nav:dump"),
+                    InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+                ]
+            ]
+            return text, InlineKeyboardMarkup(rows)
+
+        entries = sorted(
+            db_map.values(),
+            key=lambda e: str(e.get("last_seen") or ""),
+            reverse=True,
+        )
+        lines = [
+            f"{head}<b>🗄 Saved Profile Database ({len(entries)} profiles)</b>",
+            "Every scan saves full profile metadata &amp; change history in your workspace DB:",
+            "",
+        ]
+        rows: list[list[InlineKeyboardButton]] = []
+        for e in entries[:10]:
+            lat = e.get("latest") or {}
+            uname = lat.get("username") or e.get("pk")
+            scans = e.get("scan_count", 1)
+            flw = int(lat.get("follower_count", 0) or 0)
+            lines.append(f"• <b>@{uname}</b> (<code>{e.get('pk')}</code>) — {flw:,} flw · {scans} scans")
+            if uname:
+                rows.append(
+                    [
+                        InlineKeyboardButton(f"🕵️ @{uname} ({scans} scans)", callback_data=f"dump:open:{uname}"),
+                        InlineKeyboardButton("📥 DB .json", callback_data=f"dump:dbjson:{uname}"),
+                    ]
+                )
+        rows.append(
+            [
+                InlineKeyboardButton("📦 Export Full DB (.json)", callback_data="db:export_all"),
+                InlineKeyboardButton("🕵️ New Lookup", callback_data="nav:dump"),
+            ]
+        )
+        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="nav:home")])
+        return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+    async def _open_dump_card(
+        self,
+        chat_id: int,
+        user_id: int,
+        ws,
+        target_username: str,
+        send_db_json: bool = False,
+        edit_msg=None,
+        notice: str = "",
+    ) -> None:
+        slot = self._get_logged_in_slot(ws)
+        if not slot:
+            text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first to run OSINT / Profile dumps.")
+            await self._show_panel(chat_id, user_id, text, markup, edit_msg=edit_msg)
+            return
+
+        uname = sanitize_username(target_username)
+        if not uname:
+            await self._show_panel(
+                chat_id,
+                user_id,
+                "⚠️ Please provide a valid Instagram username.",
+                self._cancel_markup("nav:home"),
+                edit_msg=edit_msg,
+            )
+            return
+
+        await self._show_panel(
+            chat_id,
+            user_id,
+            f"🔎 <b>Scanning @{uname}</b> (fetching Profile, OSINT metadata &amp; updating Profile DB)...",
+            edit_msg=edit_msg,
+        )
+        try:
+            rec, diffs, db_entry = await osint_tools.fetch_and_save_profile_db(ws, slot, uname, deep_osint=True)
+            watched = await osint_tools.is_target_watched(ws, rec["username"])
+            card_html = osint_tools.format_profile_card_html(rec, diffs, db_entry, is_watched=watched)
+            if notice:
+                card_html = f"{notice}\n\n{card_html}"
+            markup = self._dump_card_markup(rec["username"], watched)
+            await self._show_panel(chat_id, user_id, card_html, markup, edit_msg=edit_msg)
+
+            if send_db_json:
+                raw_bytes = json.dumps(db_entry, indent=2, ensure_ascii=False, default=str).encode("utf-8")
+                await self.bot.send_document(
+                    chat_id=chat_id,
+                    document=InputFile(io.BytesIO(raw_bytes), filename=f"profile_db_{rec['username']}.json"),
+                    caption=f"🗄 Profile DB Record & History for @{rec['username']} (Scan #{db_entry.get('scan_count', 1)})",
+                )
+        except Exception as e:
+            text, markup = self._view_home(ws, notice=f"❌ Failed to fetch @{uname}: {e}")
+            await self._show_panel(chat_id, user_id, text, markup, edit_msg=edit_msg)
+
+    async def _execute_dump_batch(
+        self,
+        chat_id: int,
+        user_id: int,
+        ws,
+        kind: str,
+        amount: int,
+        uname: str,
+        edit_msg=None,
+    ) -> None:
+        slot = self._get_logged_in_slot(ws)
+        if not slot:
+            text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
+            await self._show_panel(chat_id, user_id, text, markup, edit_msg=edit_msg)
+            return
+
+        amt_str = "ALL" if amount <= 0 else str(amount)
+        await self._show_panel(
+            chat_id,
+            user_id,
+            f"⏳ <b>Fetching {amt_str} {kind} for @{uname}...</b>\nPlease wait while files are prepared.",
+            edit_msg=edit_msg,
+        )
+
+        try:
+            if kind in ("followers", "following"):
+                csv_bytes, json_bytes, count, canonical = await slot.ig._call(
+                    osint_tools._export_follow_list_sync,
+                    slot.ig.cl,
+                    uname,
+                    kind,
+                    amount,
+                )
+                await self.bot.send_document(
+                    chat_id=chat_id,
+                    document=InputFile(io.BytesIO(csv_bytes), filename=f"{canonical}_{kind}_{count}.csv"),
+                    caption=f"📊 @{canonical} — {count} {kind} (.csv)",
+                )
+                await self.bot.send_document(
+                    chat_id=chat_id,
+                    document=InputFile(io.BytesIO(json_bytes), filename=f"{canonical}_{kind}_{count}.json"),
+                    caption=f"🗄 @{canonical} — {count} {kind} (.json)",
+                )
+                await self._open_dump_card(
+                    chat_id,
+                    user_id,
+                    ws,
+                    canonical,
+                    notice=f"✅ Exported <b>{count} {kind}</b> for @{canonical}.",
+                )
+                return
+
+            # Media dump: posts | reels | tagged
+            items, canonical = await slot.ig._call(
+                osint_tools._fetch_user_media_list_sync,
+                slot.ig.cl,
+                uname,
+                kind,
+                amount,
+            )
+            if not items:
+                await self._open_dump_card(
+                    chat_id,
+                    user_id,
+                    ws,
+                    canonical,
+                    notice=f"ℹ️ No {kind} found for @{canonical}.",
+                )
+                return
+
+            sent_files = 0
+            with tempfile.TemporaryDirectory(prefix="ig_dump_") as tmp:
+                tmp_path = Path(tmp)
+                for idx, m in enumerate(items, start=1):
+                    files = await slot.ig._call(
+                        osint_tools._download_media_item_sync,
+                        slot.ig.cl,
+                        m,
+                        tmp_path,
+                    )
+                    likes = int(getattr(m, "like_count", 0) or 0)
+                    comments = int(getattr(m, "comment_count", 0) or 0)
+                    cap_txt = str(getattr(m, "caption_text", "") or "").strip()
+                    cap_short = (cap_txt[:250] + "…") if len(cap_txt) > 250 else cap_txt
+                    safe_cap = cap_short.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    cap = f"📸 <b>@{canonical}</b> ({idx}/{len(items)}) · ❤️ {likes:,} · 💬 {comments:,}"
+                    if safe_cap:
+                        cap += f"\n{safe_cap}"
+                    sent_files += await self._send_downloaded_files(chat_id, files, caption=cap)
+
+            await self._open_dump_card(
+                chat_id,
+                user_id,
+                ws,
+                canonical,
+                notice=f"✅ Sent <b>{sent_files}</b> media file(s) from <b>{len(items)} {kind}</b> of @{canonical}.",
+            )
+        except Exception as e:
+            await self._open_dump_card(
+                chat_id,
+                user_id,
+                ws,
+                uname,
+                notice=f"❌ Dump failed: {e}",
+            )
+
+    async def _handle_ig_link_download(
+        self,
+        chat_id: int,
+        user_id: int,
+        ws,
+        url: str,
+    ) -> None:
+        cat, target = osint_tools.detect_ig_url_category(url)
+        if cat == "profile":
+            await self._open_dump_card(chat_id, user_id, ws, target)
+            return
+
+        slot = self._get_logged_in_slot(ws)
+        if not slot:
+            text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first to download links.")
+            await self._show_panel(chat_id, user_id, text, markup, force_new=True)
+            return
+
+        await self._show_panel(
+            chat_id,
+            user_id,
+            f"📥 <b>Auto-Detected {cat.upper()} Link</b>\nDownloading media from Instagram...",
+            force_new=True,
+        )
+        try:
+            with tempfile.TemporaryDirectory(prefix="ig_dl_") as tmp:
+                res = await osint_tools.download_ig_link(slot, url, Path(tmp))
+                files = res.get("files") or []
+                author = sanitize_username(res.get("author") or "")
+                caption = res.get("caption") or "📥 Downloaded from Instagram"
+                btn_rows = []
+                if author:
+                    btn_rows.append(
+                        [InlineKeyboardButton(f"🕵️ Dump @{author}", callback_data=f"dump:open:{author}")]
+                    )
+                btn_rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="nav:home")])
+                rm = InlineKeyboardMarkup(btn_rows)
+                count = await self._send_downloaded_files(chat_id, files, caption=caption, reply_markup=rm)
+            v_txt, markup = self._view_home(ws, notice=f"✅ Downloaded {count} file(s) ({res.get('category', 'Media')}).")
+            await self._show_panel(chat_id, user_id, v_txt, markup)
+        except Exception as e:
+            v_txt, markup = self._view_home(ws, notice=f"❌ Download failed: {e}")
+            await self._show_panel(chat_id, user_id, v_txt, markup)
 
     @staticmethod
     def _cancel_markup(target: str = "nav:home") -> InlineKeyboardMarkup:
@@ -530,6 +964,299 @@ class _TokenHub:
                 await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
+            if data == "nav:dump":
+                self._chat_state[user_id] = {"step": "dump_target"}
+                db_map: dict = await ws.store.get("profile_db", {}) or {}
+                rows: list[list[InlineKeyboardButton]] = []
+                recent_entries = sorted(
+                    db_map.values(),
+                    key=lambda e: str(e.get("last_seen") or ""),
+                    reverse=True,
+                )[:6]
+                cur_row: list[InlineKeyboardButton] = []
+                for e in recent_entries:
+                    u = (e.get("latest") or {}).get("username")
+                    if u:
+                        cur_row.append(InlineKeyboardButton(f"@{u}", callback_data=f"dump:open:{u}"))
+                        if len(cur_row) == 2:
+                            rows.append(cur_row)
+                            cur_row = []
+                if cur_row:
+                    rows.append(cur_row)
+                rows.append(
+                    [
+                        InlineKeyboardButton("🗄 Saved Profile DB", callback_data="nav:profile_db"),
+                        InlineKeyboardButton("❌ Cancel", callback_data="nav:home"),
+                    ]
+                )
+                await self._show_panel(
+                    chat_id,
+                    user_id,
+                    "🕵️ <b>OSINT Dump &amp; Profile Lookup</b>\n\n"
+                    "Send any Instagram <b>@username</b> or profile URL (or tap a recent profile below):",
+                    InlineKeyboardMarkup(rows),
+                    edit_msg=query.message,
+                )
+                return
+
+            if data == "nav:watcher":
+                text, markup = await self._view_watcher(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "nav:profile_db":
+                text, markup = await self._view_profile_db(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "db:export_all":
+                db_map = await ws.store.get("profile_db", {}) or {}
+                raw_bytes = json.dumps(db_map, indent=2, ensure_ascii=False, default=str).encode("utf-8")
+                await query.message.reply_document(
+                    document=InputFile(io.BytesIO(raw_bytes), filename=f"{ws.username}_profile_db.json"),
+                    caption=f"🗄 Complete Profile Database ({len(db_map)} profiles)",
+                )
+                return
+
+            if data == "watch:add":
+                self._chat_state[user_id] = {"step": "watch_target"}
+                await self._show_panel(
+                    chat_id,
+                    user_id,
+                    "👁 <b>Add Account to Watcher</b>\n\nSend the Instagram <b>@username</b> to monitor:",
+                    self._cancel_markup("nav:watcher"),
+                    edit_msg=query.message,
+                )
+                return
+
+            if data.startswith("watch:rm:"):
+                uname = sanitize_username(data.split(":", 2)[2])
+                await osint_tools.toggle_watch_target(ws, uname)
+                text, markup = await self._view_watcher(ws, notice=f"🔕 Removed <b>@{uname}</b> from Watcher.")
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "watch:scan_all":
+                slot = self._get_logged_in_slot(ws)
+                if not slot:
+                    text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
+                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                    return
+                targets = await osint_tools.get_watched_targets(ws)
+                if not targets:
+                    text, markup = await self._view_watcher(ws, notice="ℹ️ No watched accounts to scan.")
+                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                    return
+                await self._show_panel(
+                    chat_id,
+                    user_id,
+                    f"⚡ <b>Scanning {len(targets)} watched account(s)...</b>",
+                    edit_msg=query.message,
+                )
+                alerts_sent = 0
+                with tempfile.TemporaryDirectory(prefix="ig_watch_") as tmp:
+                    tmp_path = Path(tmp)
+                    for u in list(targets.keys()):
+                        try:
+                            res = await osint_tools.check_watched_target(ws, slot, u, tmp_path)
+                            diffs = res.get("diffs") or []
+                            s_files = res.get("new_story_files") or []
+                            p_files = res.get("new_post_files") or []
+                            if diffs:
+                                msg = f"🔔 <b>Watcher Alert: @{res['username']}</b>\n" + "\n".join(diffs)
+                                await self.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+                                alerts_sent += 1
+                            if s_files:
+                                await self._send_downloaded_files(
+                                    chat_id, s_files, caption=f"📖 <b>New Story from @{res['username']}</b>"
+                                )
+                                alerts_sent += 1
+                            if p_files:
+                                await self._send_downloaded_files(
+                                    chat_id, p_files, caption=f"📸 <b>New Post from @{res['username']}</b>"
+                                )
+                                alerts_sent += 1
+                        except Exception as e:
+                            log.warning("Watch scan failed for %s: %s", u, e)
+                note = f"✅ Scanned {len(targets)} account(s). ({alerts_sent} new update alert(s))."
+                text, markup = await self._view_watcher(ws, notice=note)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            # ------------------------------------------------- Dump Card Callbacks
+            if data.startswith("dump:open:"):
+                uname = sanitize_username(data.split(":", 2)[2])
+                await self._open_dump_card(chat_id, user_id, ws, uname, edit_msg=query.message)
+                return
+
+            if data.startswith("dump:watch:"):
+                uname = sanitize_username(data.split(":", 2)[2])
+                now_watched = await osint_tools.toggle_watch_target(ws, uname)
+                note = f"👁 Now watching <b>@{uname}</b>." if now_watched else f"🔕 Unwatched <b>@{uname}</b>."
+                await self._open_dump_card(chat_id, user_id, ws, uname, edit_msg=query.message, notice=note)
+                return
+
+            if data.startswith("dump:dbjson:"):
+                uname = sanitize_username(data.split(":", 2)[2])
+                await self._open_dump_card(chat_id, user_id, ws, uname, send_db_json=True, edit_msg=query.message)
+                return
+
+            if data.startswith("dump:avatar:"):
+                uname = sanitize_username(data.split(":", 2)[2])
+                slot = self._get_logged_in_slot(ws)
+                if not slot:
+                    text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
+                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                    return
+                await self._show_panel(chat_id, user_id, f"🖼 <b>Downloading HD Avatar for @{uname}...</b>", edit_msg=query.message)
+                try:
+                    with tempfile.TemporaryDirectory(prefix="ig_av_") as tmp:
+                        fpath, canonical = await slot.ig._call(
+                            osint_tools._download_avatar_sync, slot.ig.cl, uname, Path(tmp)
+                        )
+                        await self._send_downloaded_files(chat_id, [fpath], caption=f"🖼 <b>HD Avatar — @{canonical}</b>")
+                    await self._open_dump_card(chat_id, user_id, ws, canonical, notice="✅ Sent HD Avatar.")
+                except Exception as e:
+                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Avatar error: {e}")
+                return
+
+            if data.startswith("dump:stories:"):
+                uname = sanitize_username(data.split(":", 2)[2])
+                slot = self._get_logged_in_slot(ws)
+                if not slot:
+                    text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
+                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                    return
+                await self._show_panel(chat_id, user_id, f"📖 <b>Fetching active stories for @{uname}...</b>", edit_msg=query.message)
+                try:
+                    with tempfile.TemporaryDirectory(prefix="ig_st_") as tmp:
+                        files, canonical = await slot.ig._call(
+                            osint_tools._download_active_stories_sync, slot.ig.cl, uname, Path(tmp)
+                        )
+                        if not files:
+                            await self._open_dump_card(chat_id, user_id, ws, canonical, notice=f"ℹ️ @{canonical} has no active stories right now.")
+                            return
+                        cnt = await self._send_downloaded_files(
+                            chat_id, files, caption=f"📖 <b>Active Stories — @{canonical}</b> ({len(files)})"
+                        )
+                    await self._open_dump_card(chat_id, user_id, ws, canonical, notice=f"✅ Sent {cnt} active story file(s).")
+                except Exception as e:
+                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Stories error: {e}")
+                return
+
+            if data.startswith("dump:hl:"):
+                uname = sanitize_username(data.split(":", 2)[2])
+                slot = self._get_logged_in_slot(ws)
+                if not slot:
+                    text, markup = self._view_add_ig("⚠️ Log in to an Instagram account first.")
+                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                    return
+                await self._show_panel(chat_id, user_id, f"✨ <b>Loading Highlights for @{uname}...</b>", edit_msg=query.message)
+                try:
+                    hl_list, canonical = await slot.ig._call(osint_tools._list_highlights_sync, slot.ig.cl, uname)
+                    if not hl_list:
+                        await self._open_dump_card(chat_id, user_id, ws, canonical, notice=f"ℹ️ @{canonical} has no Highlights.")
+                        return
+                    rows: list[list[InlineKeyboardButton]] = []
+                    for h in hl_list[:12]:
+                        rows.append(
+                            [
+                                InlineKeyboardButton(
+                                    f"✨ {h['title']} ({h['media_count']})",
+                                    callback_data=f"dump:hlget:{h['pk']}:{canonical}",
+                                )
+                            ]
+                        )
+                    rows.append(
+                        [
+                            InlineKeyboardButton("📦 Download ALL Highlights", callback_data=f"dump:hlall:{canonical}"),
+                            InlineKeyboardButton(f"⬅️ Back to @{canonical}", callback_data=f"dump:open:{canonical}"),
+                        ]
+                    )
+                    await self._show_panel(
+                        chat_id,
+                        user_id,
+                        f"✨ <b>Highlights for @{canonical} ({len(hl_list)})</b>\nTap a highlight tray to download, or download all:",
+                        InlineKeyboardMarkup(rows),
+                        edit_msg=query.message,
+                    )
+                except Exception as e:
+                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Highlights error: {e}")
+                return
+
+            if data.startswith("dump:hlget:"):
+                parts = data.split(":", 3)
+                hpk, uname = parts[2], sanitize_username(parts[3])
+                slot = self._get_logged_in_slot(ws)
+                if not slot:
+                    return
+                await self._show_panel(chat_id, user_id, f"⏳ <b>Downloading Highlight for @{uname}...</b>", edit_msg=query.message)
+                try:
+                    with tempfile.TemporaryDirectory(prefix="ig_hl_") as tmp:
+                        files, title = await slot.ig._call(
+                            osint_tools._download_highlight_sync, slot.ig.cl, hpk, Path(tmp)
+                        )
+                        cnt = await self._send_downloaded_files(
+                            chat_id, files, caption=f"✨ <b>Highlight '{title}' — @{uname}</b> ({len(files)})"
+                        )
+                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"✅ Sent {cnt} item(s) from Highlight '{title}'.")
+                except Exception as e:
+                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Highlight error: {e}")
+                return
+
+            if data.startswith("dump:hlall:"):
+                uname = sanitize_username(data.split(":", 2)[2])
+                slot = self._get_logged_in_slot(ws)
+                if not slot:
+                    return
+                await self._show_panel(chat_id, user_id, f"⏳ <b>Downloading ALL Highlights for @{uname}...</b>", edit_msg=query.message)
+                try:
+                    hl_list, canonical = await slot.ig._call(osint_tools._list_highlights_sync, slot.ig.cl, uname)
+                    total_sent = 0
+                    with tempfile.TemporaryDirectory(prefix="ig_hlall_") as tmp:
+                        tmp_path = Path(tmp)
+                        for h in hl_list[:10]:
+                            files, title = await slot.ig._call(
+                                osint_tools._download_highlight_sync, slot.ig.cl, h["pk"], tmp_path
+                            )
+                            total_sent += await self._send_downloaded_files(
+                                chat_id, files, caption=f"✨ <b>Highlight '{title}' — @{canonical}</b>"
+                            )
+                    await self._open_dump_card(chat_id, user_id, ws, canonical, notice=f"✅ Sent {total_sent} Highlight file(s).")
+                except Exception as e:
+                    await self._open_dump_card(chat_id, user_id, ws, uname, notice=f"❌ Highlights error: {e}")
+                return
+
+            if data.startswith("dump:sel:"):
+                parts = data.split(":", 3)
+                kind, uname = parts[2], sanitize_username(parts[3])
+                text, markup = self._view_count_selector(kind, uname)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data.startswith("dump:custom:"):
+                parts = data.split(":", 3)
+                kind, uname = parts[2], sanitize_username(parts[3])
+                self._chat_state[user_id] = {"step": "dump_count", "kind": kind, "target": uname}
+                await self._show_panel(
+                    chat_id,
+                    user_id,
+                    f"🔢 <b>Custom Count — @{uname} ({kind})</b>\n\n"
+                    f"Send how many <b>{kind}</b> you want to download/export (e.g. <code>12</code>, or <code>0</code> for ALL):",
+                    self._cancel_markup(f"dump:open:{uname}"),
+                    edit_msg=query.message,
+                )
+                return
+
+            if data.startswith("dump:run:"):
+                parts = data.split(":", 4)
+                kind = parts[2]
+                amount = int(parts[3])
+                uname = sanitize_username(parts[4])
+                await self._execute_dump_batch(chat_id, user_id, ws, kind, amount, uname, edit_msg=query.message)
+                return
+
+            # ------------------------------------------------- Group & Account Callbacks
             if data == "group:set":
                 self._chat_state[user_id] = {"step": "group_id"}
                 await self._show_panel(
@@ -810,7 +1537,7 @@ class _TokenHub:
                 await self._show_panel(chat_id, user_id, v_txt, markup)
                 return
 
-            # 3. Conversational prompts (Group ID, IG Username, IG Password/Cookie)
+            # 3. Conversational prompts (Group ID, IG Username, IG Password/Cookie, Dump target, Custom Count, Watch target)
             if state and not text.startswith("/"):
                 step = state.get("step")
 
@@ -824,6 +1551,50 @@ class _TokenHub:
                         notice = f"❌ {e}"
                     v_txt, markup = self._view_home(ws, notice=notice)
                     await self._show_panel(chat_id, user_id, v_txt, markup)
+                    return
+
+                if step == "dump_target":
+                    await self._try_delete(message)
+                    self._chat_state.pop(user_id, None)
+                    url = osint_tools.extract_ig_url(text)
+                    if url:
+                        await self._handle_ig_link_download(chat_id, user_id, ws, url)
+                        return
+                    await self._open_dump_card(chat_id, user_id, ws, text.strip())
+                    return
+
+                if step == "watch_target":
+                    await self._try_delete(message)
+                    self._chat_state.pop(user_id, None)
+                    uname = sanitize_username(text)
+                    if uname:
+                        await osint_tools.toggle_watch_target(ws, uname)
+                        v_txt, markup = await self._view_watcher(ws, notice=f"👁 Added <b>@{uname}</b> to Watcher.")
+                    else:
+                        v_txt, markup = await self._view_watcher(ws, notice="⚠️ Invalid username.")
+                    await self._show_panel(chat_id, user_id, v_txt, markup)
+                    return
+
+                if step == "dump_count":
+                    await self._try_delete(message)
+                    kind = state.get("kind", "posts")
+                    target = state.get("target", "")
+                    raw_num = text.strip().lower()
+                    if raw_num in ("all", "0", "max"):
+                        amount = 0
+                    else:
+                        try:
+                            amount = max(0, int(raw_num))
+                        except ValueError:
+                            await self._show_panel(
+                                chat_id,
+                                user_id,
+                                f"⚠️ Send a valid number (e.g. <code>10</code> or <code>0</code> for ALL):",
+                                self._cancel_markup(f"dump:open:{target}"),
+                            )
+                            return
+                    self._chat_state.pop(user_id, None)
+                    await self._execute_dump_batch(chat_id, user_id, ws, kind, amount, target)
                     return
 
                 if step == "ig_user":
@@ -875,7 +1646,14 @@ class _TokenHub:
                     await self._show_panel(chat_id, user_id, v_txt, markup)
                     return
 
-            # 4. Slash Commands
+            # 4. Auto-Detect Any Pasted Instagram Link in Private Chat!
+            ig_url = osint_tools.extract_ig_url(text) if not text.startswith("/") else None
+            if ig_url:
+                await self._try_delete(message)
+                await self._handle_ig_link_download(chat_id, user_id, ws, ig_url)
+                return
+
+            # 5. Slash Commands
             if text.startswith("/"):
                 self._chat_state.pop(user_id, None)
                 parts = text.split()
@@ -894,6 +1672,61 @@ class _TokenHub:
 
                 if cmd_name == "status":
                     v_txt, markup = self._view_status(ws)
+                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                    return
+
+                if cmd_name in ("dump", "osint"):
+                    if args:
+                        url = osint_tools.extract_ig_url(args[0])
+                        target = url if url else args[0]
+                        if url:
+                            await self._handle_ig_link_download(chat_id, user_id, ws, url)
+                        else:
+                            await self._open_dump_card(chat_id, user_id, ws, target)
+                        return
+                    self._chat_state[user_id] = {"step": "dump_target"}
+                    await self._show_panel(
+                        chat_id,
+                        user_id,
+                        "🕵️ <b>OSINT Dump &amp; Profile Lookup</b>\n\nSend any Instagram <b>@username</b> or profile URL:",
+                        self._cancel_markup("nav:home"),
+                        force_new=True,
+                    )
+                    return
+
+                if cmd_name == "profile":
+                    target = args[0] if args else (ws.bridged_ig or ws.active_ig)
+                    if not target:
+                        v_txt, markup = await self._view_profile_db(ws)
+                        await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                        return
+                    await self._open_dump_card(chat_id, user_id, ws, target, send_db_json=True)
+                    return
+
+                if cmd_name in ("dl", "download"):
+                    if not args:
+                        await self._show_panel(
+                            chat_id,
+                            user_id,
+                            "📥 <b>Instagram Auto-Downloader</b>\n\nPaste any Instagram Reel, Post, Story, Highlight, or Profile URL right here in the chat:",
+                            self._cancel_markup("nav:home"),
+                            force_new=True,
+                        )
+                        return
+                    url = osint_tools.extract_ig_url(args[0]) or args[0]
+                    await self._handle_ig_link_download(chat_id, user_id, ws, url)
+                    return
+
+                if cmd_name in ("watch", "watcher"):
+                    if args:
+                        uname = sanitize_username(args[0])
+                        if uname:
+                            now_w = await osint_tools.toggle_watch_target(ws, uname)
+                            note = f"👁 Added <b>@{uname}</b> to Watcher." if now_w else f"🔕 Removed <b>@{uname}</b> from Watcher."
+                            v_txt, markup = await self._view_watcher(ws, notice=note)
+                            await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                            return
+                    v_txt, markup = await self._view_watcher(ws)
                     await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
                     return
 
