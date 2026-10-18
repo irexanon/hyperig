@@ -656,6 +656,7 @@
 
       <nav class="pill-nav" id="top-pill-nav" style="display: none;">
         <a href="#sec-overview" class="active" onclick="setActiveNav(this)">Overview</a>
+        <a href="#sec-settings" onclick="setActiveNav(this)">Settings</a>
         <a href="#sec-auth" onclick="setActiveNav(this)">Authentication</a>
         <a href="#sec-telegram" onclick="setActiveNav(this)">Telegram &amp; Topics</a>
         <a href="#sec-logs" onclick="setActiveNav(this)">Live Console</a>
@@ -875,6 +876,58 @@
           <div class="kpi-footer" style="margin-top: 14px;">
             <span id="bot-dm-hint">Manage directly in Telegram Bot with <code class="mono">/start</code></span>
             <span class="mono" id="bridged-account-pill">Bridge: None</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Workspace Settings: bridge control, routing account and account management -->
+      <section id="sec-settings" class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Workspace Settings</h2>
+            <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+              Control DM bridge routing, pick the Instagram account attached to Telegram, and manage saved accounts.
+            </div>
+          </div>
+          <span id="settings-bridge-status" class="text-warn" style="font-size: 12px; font-weight: 700;">Bridge status unknown</span>
+        </div>
+
+        <div class="form-2col">
+          <div class="card" style="padding: 16px; gap: 14px;">
+            <div>
+              <div style="font-size: 13px; font-weight: 700; margin-bottom: 5px;">DM Bridge</div>
+              <div style="font-size: 12px; color: var(--text-secondary);">
+                Pause message forwarding without logging out or deleting the Instagram session.
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+              <label style="margin: 0;">Enable Instagram ↔ Telegram routing</label>
+              <input type="checkbox" class="switch" id="sw-bridge" onchange="toggleBridge(this.checked)" disabled />
+            </div>
+            <div id="settings-bridge-hint" style="font-size: 11.5px; color: var(--text-muted);">
+              Add an Instagram account to enable the bridge.
+            </div>
+            <div class="field" style="margin-bottom: 0;">
+              <label>Instagram account for the DM bridge</label>
+              <select id="bridge-account-select" disabled>
+                <option value="">Add an Instagram account first</option>
+              </select>
+            </div>
+            <button id="btn-bridge-attach" class="primary" onclick="attachBridgeSelectedAccount()" disabled>Use selected account</button>
+            <button onclick="document.getElementById('sec-telegram').scrollIntoView({behavior:'smooth'})">Configure Telegram group &amp; bot</button>
+          </div>
+
+          <div class="card" style="padding: 16px; gap: 12px;">
+            <div>
+              <div style="font-size: 13px; font-weight: 700; margin-bottom: 5px;">Instagram Accounts</div>
+              <div style="font-size: 12px; color: var(--text-secondary);">
+                View login state, choose the bridged account, or open an account's session controls.
+              </div>
+            </div>
+            <div id="settings-account-list" class="account-list" style="max-height: 260px;">
+              <div style="font-size: 12px; color: var(--text-muted);">No accounts loaded.</div>
+            </div>
+            <button onclick="selectIgAccount('__NEW__')">＋ Add another account</button>
           </div>
         </div>
       </section>
