@@ -102,10 +102,12 @@ def _find_url(node, keys: tuple[str, ...], depth: int = 0, seen: set[int] | None
 
     for key in keys:
         candidate = _value(node, key)
-        if isinstance(candidate, str) and candidate.lower().startswith(("https://", "http://")):
-            path = urlparse(candidate).path.lower()
-            if path.endswith((".m4a", ".mp3", ".aac", ".mp4")):
-                return candidate
+        if candidate is not None:
+            candidate_url = str(candidate)
+            if candidate_url.lower().startswith(("https://", "http://")):
+                path = urlparse(candidate_url).path.lower()
+                if path.endswith((".m4a", ".mp3", ".aac", ".mp4")):
+                    return candidate_url
 
     if isinstance(node, dict):
         children = node.values()
@@ -200,6 +202,7 @@ class AutoDownloadModule(BaseModule):
             allow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0"},
         )
+        response.raise_for_status()
         final_url = response.url
         if "/highlights/" not in urlparse(final_url).path:
             # Some /s/ share URLs return an HTML page instead of a direct redirect.
