@@ -48,6 +48,20 @@ class ModuleManager:
     def all_callbacks(self) -> dict[str, tuple[object, BaseModule]]:
         return self._callbacks
 
+    async def start_all(self) -> None:
+        for module in self.modules:
+            try:
+                await module.on_start()
+            except Exception:
+                log.exception("Module %s failed to start", module.name)
+
+    async def stop_all(self) -> None:
+        for module in self.modules:
+            try:
+                await module.on_stop()
+            except Exception:
+                log.exception("Module %s failed to stop", module.name)
+
     async def process_message(self, message):
         """Run a message through every module. A module may return None to drop it."""
         for module in self.modules:

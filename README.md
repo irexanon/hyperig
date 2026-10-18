@@ -75,6 +75,14 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 | `/posts <user> [n]`, `/reels <user> [n]` | latest posts (1-20) or reels (1-10) |
 | `/stories <user>`, `/highlights <user>` | current stories, or a button list of highlights |
 
+| `/watch <user> [posts\|stories\|all]` | get new posts, reels and stories of a public account in this chat |
+| `/unwatch <user>`, `/watchlist` | stop watching; list with remove / check-now buttons |
+
+**Watcher** (`modules/watcher.py`): up to 10 public accounts, checked about every 10 minutes with random
+jitter and a pause between accounts. Existing posts and stories are recorded when you add an account, so you
+only get what appears afterwards. Seen items are saved, so restarts never repeat or lose anything. A rate limit
+from Instagram pauses all checks for 15 minutes and tells you once; an account that turns private is removed.
+
 The profile tools (`modules/dump.py`) work on **public accounts only**; a private account just shows its
 public card. They never show or export phone numbers, e-mail addresses or street addresses. One job runs
 per chat at a time, with a short pause between items, to keep the logged-in account out of rate limits.

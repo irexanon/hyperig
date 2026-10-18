@@ -11,21 +11,20 @@ Rules this module keeps:
   is not hammered (instagrapi Best Practices: moderate pace, no bursts).
 """
 import asyncio
-import html
 import io
 import json
 import random
 import re
-from datetime import timezone
 
 import requests
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputMediaPhoto, InputMediaVideo
-from telegram.error import BadRequest, RetryAfter, TelegramError
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.error import BadRequest, TelegramError
 
 from core.auth import describe_error
 from modules.base import BaseModule, Command
 from utils import media as media_utils
 from utils.logger import get_logger
+from utils.tgsend import caption_of, clip as _clip, esc as _esc, items_of, num as _num, send_items, send_one
 
 log = get_logger("dump")
 
@@ -37,22 +36,6 @@ POSTS_DEFAULT, POSTS_MAX = 5, 20
 REELS_DEFAULT, REELS_MAX = 3, 10
 HIGHLIGHT_BUTTONS = 20
 PREFIX = "dump"
-
-
-def _esc(text) -> str:
-    return html.escape(str(text or ""), quote=False)
-
-
-def _clip(text: str, limit: int) -> str:
-    text = (text or "").strip()
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
-
-
-def _num(value) -> str:
-    try:
-        return f"{int(value):,}"
-    except (TypeError, ValueError):
-        return "?"
 
 
 def parse_target(raw: str) -> str | None:
@@ -177,17 +160,6 @@ class DumpModule(BaseModule):
 
     # ------------------------------------------------------------------ telegram helpers
     @staticmethod
-    async def _tg(call):
-        """Run a Telegram call, waiting out flood limits (up to 3 tries)."""
-        for _ in range(2):
-            try:
-                return await call()
-            except RetryAfter as e:
-                wait = e.retry_after.total_seconds() if hasattr(e.retry_after, "total_seconds") else float(e.retry_after)
-                await asyncio.sleep(wait + 1)
-        return await call()
-
-    @staticmethod
     async def _edit(message, text: str, markup=None) -> None:
         try:
             await message.edit_text(text, parse_mode="HTML", reply_markup=markup)
@@ -201,82 +173,7 @@ class DumpModule(BaseModule):
             log.info("Could not download media (%s)", e)
             return None
 
-    async def _send_one(self, bot, chat_id: int, kind: str, data: bytes, caption: str) -> None:
-        cap = caption[:1024] or None
-        try:
-            if kind == "photo":
-                await self._tg(lambda: bot.send_photo(chat_id, photo=data, caption=cap, parse_mode="HTML"))
-            else:
-                await self._tg(
-                    lambda: bot.send_video(
-                        chat_id, video=InputFile(data, filename="video.mp4"), caption=cap, parse_mode="HTML", supports_streaming=True
-                    )
-                )
-        except BadRequest as e:
-            log.info("Telegram refused the %s (%s), sending it as a file", kind, e)
-            name = "photo.jpg" if kind == "photo" else "video.mp4"
-            await self._tg(lambda: bot.send_document(chat_id, document=InputFile(data, filename=name), caption=cap, parse_mode="HTML"))
-
-    async def _send_items(self, bot, chat_id: int, items: list[tuple[str, str]], caption: str) -> int:
-        """Send one post/story: a single file, or an album (Telegram allows 10 per album). Returns files sent."""
-        files: list[tuple[str, bytes]] = []
-        for kind, url in items[:10]:
-            data = await self._fetch(url)
-            if data:
-                files.append((kind, data))
-        if not files:
-            return 0
-        if len(files) == 1:
-            await self._send_one(bot, chat_id, files[0][0], files[0][1], caption)
-            return 1
-        media = []
-        for i, (kind, data) in enumerate(files):
-            cap = caption[:1024] if i == 0 else None
-            if kind == "photo":
-                media.append(InputMediaPhoto(media=data, caption=cap, parse_mode="HTML"))
-            else:
-                media.append(InputMediaVideo(media=data, caption=cap, parse_mode="HTML", supports_streaming=True))
-        try:
-            await self._tg(lambda: bot.send_media_group(chat_id, media=media))
-        except BadRequest as e:
-            log.info("Album refused (%s), sending the files one by one", e)
-            for i, (kind, data) in enumerate(files):
-                await self._send_one(bot, chat_id, kind, data, caption if i == 0 else "")
-        return len(files)
-
     # ------------------------------------------------------------------ media helpers
-    @staticmethod
-    def _items(m) -> list[tuple[str, str]]:
-        """(kind, url) for every file of a post / reel / story."""
-        out: list[tuple[str, str]] = []
-        resources = getattr(m, "resources", None)
-        if m.media_type == 8 and resources:
-            for r in resources:
-                if r.media_type == 2 and r.video_url:
-                    out.append(("video", str(r.video_url)))
-                elif r.thumbnail_url:
-                    out.append(("photo", str(r.thumbnail_url)))
-        elif m.media_type == 2 and m.video_url:
-            out.append(("video", str(m.video_url)))
-        elif m.thumbnail_url:
-            out.append(("photo", str(m.thumbnail_url)))
-        return out
-
-    @staticmethod
-    def _caption(m, kind: str) -> str:
-        when = m.taken_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if m.taken_at else ""
-        if kind == "story":
-            return f"📖 Story · {when}"
-        text = _esc(_clip(getattr(m, "caption_text", "") or "", 600))
-        link = f'<a href="https://www.instagram.com/p/{m.code}/">View on Instagram</a>' if getattr(m, "code", None) else ""
-        stats = []
-        if getattr(m, "like_count", -1) is not None and getattr(m, "like_count", -1) >= 0:
-            stats.append(f"❤️ {_num(m.like_count)}")
-        if getattr(m, "comment_count", None) is not None:
-            stats.append(f"💬 {_num(m.comment_count)}")
-        head = " · ".join(x for x in (when, *stats) if x)
-        return "\n".join(x for x in (text, head, link) if x)
-
     @staticmethod
     def _post_meta(m) -> dict:
         return {
@@ -322,7 +219,7 @@ class DumpModule(BaseModule):
             data = await self._fetch(url) if url else None
             if not data:
                 raise RuntimeError("No profile picture could be downloaded.")
-            await self._send_one(bot, chat_id, "photo", data, f"🖼 @{_esc(username)}")
+            await send_one(bot, chat_id, "photo", data, f"🖼 @{_esc(username)}")
             return 0, 0
 
         if act == "js":
@@ -380,8 +277,8 @@ class DumpModule(BaseModule):
     async def _send_many(self, bot, chat_id, status, medias, kind: str) -> tuple[int, int]:
         sent = 0
         for i, m in enumerate(medias, 1):
-            items = self._items(m)
-            if items and await self._send_items(bot, chat_id, items, self._caption(m, kind)):
+            items = items_of(m)
+            if items and await send_items(bot, chat_id, items, caption_of(m, kind), self._fetch):
                 sent += 1
             if i % 2 == 0 and i != len(medias):
                 await self._edit(status, f"⏳ {i}/{len(medias)}…")

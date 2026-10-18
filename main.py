@@ -96,6 +96,7 @@ class InstagramSlot:
             await self.bridge.start(self.ig, self.modules)
             await self.ig.restore_saved_session()
             self._poller_task = asyncio.create_task(self._run_poller())
+            await self.modules.start_all()
         finally:
             current_user_var.reset(tok)
 
@@ -295,6 +296,7 @@ class InstagramSlot:
     async def stop(self) -> None:
         tok = current_user_var.set(self.user_id)
         try:
+            await self.modules.stop_all()
             await self.ig.stop()
             if self._poller_task:
                 self._poller_task.cancel()
