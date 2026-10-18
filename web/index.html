@@ -12,18 +12,21 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-canvas: #080A0F;
-      --bg-surface: #0F131C;
-      --bg-elevated: #151B27;
-      --bg-input: #090C12;
-      --border: rgba(255, 255, 255, 0.075);
-      --border-strong: rgba(255, 255, 255, 0.14);
-      --border-focus: #38BDF8;
+      --bg-outer: #090A0D;
+      --bg-shell: #111318;
+      --bg-card: #171920;
+      --bg-card-hover: #1C1F28;
+      --bg-input: #111318;
+      --bg-pill: #1B1E26;
+      --border: rgba(255, 255, 255, 0.068);
+      --border-strong: rgba(255, 255, 255, 0.12);
+      --border-focus: #FF5A26;
       --text-primary: #F8FAFC;
       --text-secondary: #94A3B8;
       --text-muted: #64748B;
-      --accent: #0EA5E9;
-      --accent-hover: #38BDF8;
+      --accent: #FF5A26;
+      --accent-hover: #FF6E40;
+      --accent-soft: rgba(255, 90, 38, 0.14);
       --ok: #10B981;
       --warn: #F59E0B;
       --err: #EF4444;
@@ -31,17 +34,22 @@
 
     * { box-sizing: border-box; }
 
+    html { scroll-behavior: smooth; }
+
     body {
       margin: 0;
-      background: var(--bg-canvas);
+      background: var(--bg-outer);
       color: var(--text-primary);
       font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
       font-size: 13.5px;
-      line-height: 1.55;
+      line-height: 1.5;
       min-height: 100vh;
-      display: flex;
-      flex-direction: column;
+      padding: 18px 22px 36px;
       -webkit-font-smoothing: antialiased;
+    }
+
+    @media (max-width: 768px) {
+      body { padding: 0 0 28px; }
     }
 
     .mono {
@@ -49,7 +57,34 @@
       font-variant-numeric: tabular-nums;
     }
 
-    /* 3-Zone Top Bar */
+    .tabular {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Main Framed App Shell */
+    .app-frame {
+      max-width: 1400px;
+      margin: 0 auto;
+      background: var(--bg-shell);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+      min-height: calc(100vh - 54px);
+      display: flex;
+      flex-direction: column;
+    }
+
+    @media (max-width: 768px) {
+      .app-frame {
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+        min-height: 100vh;
+      }
+    }
+
+    /* Top Bar Contract: Zone 1 Brand | Zone 2 Pill Nav | Zone 3 User Action */
     header.topbar {
       display: flex;
       align-items: center;
@@ -57,101 +92,149 @@
       gap: 32px;
       padding: 14px 28px;
       border-bottom: 1px solid var(--border);
-      background: var(--bg-surface);
+      background: rgba(17, 19, 24, 0.92);
+      backdrop-filter: blur(12px);
       position: sticky;
       top: 0;
-      z-index: 20;
+      z-index: 30;
     }
 
-    .brand-title {
-      font-size: 16px;
-      font-weight: 700;
-      color: var(--text-primary);
+    .brand-mark {
+      display: flex;
+      align-items: center;
+      gap: 11px;
       text-decoration: none;
+      color: var(--text-primary);
+      font-weight: 700;
+      font-size: 15.5px;
       letter-spacing: -0.02em;
       white-space: nowrap;
       flex-shrink: 0;
     }
 
-    nav.topnav {
+    .brand-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #FF7043 0%, #FF4514 100%);
       display: flex;
       align-items: center;
-      gap: 26px;
+      justify-content: center;
+      box-shadow: 0 4px 14px rgba(255, 90, 38, 0.35);
+      flex-shrink: 0;
     }
 
-    nav.topnav a {
+    nav.pill-nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--bg-pill);
+      border: 1px solid var(--border);
+      padding: 4px;
+      border-radius: 999px;
+    }
+
+    nav.pill-nav a {
       color: var(--text-secondary);
       text-decoration: none;
-      font-size: 13px;
-      font-weight: 500;
-      white-space: nowrap;
-      padding: 4px 0;
-      border-bottom: 2px solid transparent;
-      transition: color 150ms ease, border-color 150ms ease;
-    }
-
-    nav.topnav a:hover,
-    nav.topnav a.active {
-      color: var(--text-primary);
-      border-bottom-color: var(--accent);
-    }
-
-    /* Workspace Layout */
-    .app-shell {
-      display: grid;
-      grid-template-columns: 280px 1fr;
-      flex: 1;
-      max-width: 1440px;
-      width: 100%;
-      margin: 0 auto;
-    }
-
-    aside.sidebar {
-      background: var(--bg-surface);
-      border-right: 1px solid var(--border);
-      padding: 22px 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 24px;
-    }
-
-    main.viewport {
-      padding: 26px 32px 48px;
-      display: flex;
-      flex-direction: column;
-      gap: 22px;
-      overflow-y: auto;
-    }
-
-    @media (max-width: 980px) {
-      .app-shell { grid-template-columns: 1fr; }
-      aside.sidebar { border-right: none; border-bottom: 1px solid var(--border); }
-      nav.topnav { display: none; }
-      main.viewport { padding: 20px 18px 40px; }
-    }
-
-    /* Typography & Labels */
-    .section-kicker {
-      font-size: 11.5px;
+      font-size: 12.5px;
       font-weight: 600;
-      color: var(--text-secondary);
-      margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      padding: 7px 16px;
+      border-radius: 999px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: color 150ms ease, background 150ms ease;
     }
 
-    label {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--text-secondary);
-      margin-bottom: 5px;
+    nav.pill-nav a:hover {
+      color: var(--text-primary);
     }
 
-    /* Inputs & Buttons */
+    nav.pill-nav a.active {
+      background: var(--accent);
+      color: #FFFFFF;
+      box-shadow: 0 2px 10px rgba(255, 90, 38, 0.35);
+    }
+
+    .top-profile {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .avatar-circle {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: #232733;
+      border: 1px solid var(--border-strong);
+      color: var(--text-primary);
+      font-weight: 700;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-transform: uppercase;
+    }
+
+    @media (max-width: 960px) {
+      nav.pill-nav { display: none; }
+      header.topbar { padding: 12px 18px; }
+    }
+
+    /* Buttons & Inputs */
+    button {
+      background: #1E222D;
+      color: var(--text-primary);
+      border: 1px solid var(--border-strong);
+      padding: 8px 15px;
+      border-radius: 9px;
+      font-size: 12.5px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 150ms ease, transform 120ms ease, opacity 150ms ease;
+    }
+
+    button:hover:not(:disabled) {
+      background: #262B38;
+    }
+
+    button:active:not(:disabled) {
+      transform: scale(0.985);
+    }
+
+    button:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      background: linear-gradient(135deg, #FF6A3D 0%, #FF4B19 100%);
+      border-color: #FF5A26;
+      color: #FFFFFF;
+      box-shadow: 0 4px 14px rgba(255, 90, 38, 0.26);
+    }
+
+    button.primary:hover:not(:disabled) {
+      background: linear-gradient(135deg, #FF7950 0%, #FF5726 100%);
+    }
+
+    button.success-btn {
+      background: rgba(16, 185, 129, 0.14);
+      border-color: rgba(16, 185, 129, 0.45);
+      color: var(--ok);
+    }
+
+    button.danger {
+      background: rgba(239, 68, 68, 0.08);
+      color: #F87171;
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
     input[type="text"],
     input[type="password"],
     input[type="number"],
@@ -159,10 +242,10 @@
     select {
       width: 100%;
       background: var(--bg-input);
-      border: 1px solid var(--border);
+      border: 1px solid var(--border-strong);
       color: var(--text-primary);
-      padding: 9px 12px;
-      border-radius: 7px;
+      padding: 10px 13px;
+      border-radius: 9px;
       font-size: 13px;
       font-family: inherit;
       outline: none;
@@ -175,149 +258,332 @@
       border-color: var(--border-focus);
     }
 
-    button {
-      background: var(--bg-elevated);
-      color: var(--text-primary);
+    label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+
+    .field { margin-bottom: 13px; }
+
+    /* Auth Gate Screen (Sign In vs Register) */
+    .auth-gate-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      background: radial-gradient(circle at 50% 0%, rgba(255, 90, 38, 0.15), transparent 55%);
+    }
+
+    .auth-gate-card {
+      width: 100%;
+      max-width: 430px;
+      background: var(--bg-card);
       border: 1px solid var(--border-strong);
-      padding: 8px 14px;
+      border-radius: 18px;
+      padding: 30px 28px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 4px;
+      margin-bottom: 20px;
+    }
+
+    .segmented.three {
+      grid-template-columns: repeat(3, 1fr);
+    }
+
+    .segmented button {
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      padding: 8px 10px;
       border-radius: 7px;
       font-size: 12.5px;
-      font-weight: 600;
-      font-family: inherit;
-      cursor: pointer;
-      white-space: nowrap;
-      flex-shrink: 0;
-      transition: background 150ms ease, opacity 150ms ease;
+      box-shadow: none;
     }
 
-    button:hover:not(:disabled) {
-      background: #1E2738;
-    }
-
-    button:disabled {
-      opacity: 0.42;
-      cursor: not-allowed;
-    }
-
-    button.primary {
+    .segmented button.active {
       background: var(--accent);
-      border-color: var(--accent);
-      color: #06090E;
+      color: #FFFFFF;
     }
 
-    button.primary:hover:not(:disabled) {
-      background: var(--accent-hover);
-    }
-
-    button.success-btn {
-      background: rgba(16, 185, 129, 0.14);
-      border-color: rgba(16, 185, 129, 0.45);
-      color: var(--ok);
-    }
-
-    button.danger {
-      background: transparent;
-      color: var(--err);
-      border-color: rgba(239, 68, 68, 0.35);
-    }
-
-    /* Sidebar Navigation Items */
-    .nav-list {
+    /* Dashboard Content Canvas */
+    main.dashboard-body {
+      padding: 0 28px 36px;
       display: flex;
       flex-direction: column;
-      gap: 5px;
+      gap: 20px;
     }
 
-    .nav-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      width: 100%;
-      text-align: left;
-      padding: 9px 11px;
-      border-radius: 7px;
-      background: transparent;
-      border: 1px solid transparent;
-      color: var(--text-secondary);
-      font-weight: 500;
-      font-size: 13px;
+    @media (max-width: 768px) {
+      main.dashboard-body { padding: 0 16px 28px; }
     }
 
-    .nav-item:hover {
-      background: rgba(255, 255, 255, 0.03);
-      color: var(--text-primary);
-    }
-
-    .nav-item.active {
-      background: rgba(14, 165, 233, 0.12);
-      border-color: rgba(14, 165, 233, 0.4);
-      color: var(--text-primary);
-    }
-
-    /* Panels */
-    .panel {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 22px 24px;
-    }
-
-    .panel-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-      padding-bottom: 14px;
-      margin-bottom: 18px;
-      border-bottom: 1px solid var(--border);
-      flex-wrap: wrap;
-    }
-
-    .panel-title {
-      margin: 0;
-      font-size: 15.5px;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-    }
-
-    .meta-inline {
-      font-size: 12px;
-      color: var(--text-secondary);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    /* Account Bridge Banner */
-    .bridge-bar {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 18px 22px;
+    /* Hero Greeting Banner with Subtle Warm Orange Glow */
+    .hero-banner {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 20px;
+      padding: 26px 4px 10px;
+      background: radial-gradient(ellipse at 12% 40%, rgba(255, 90, 38, 0.16), transparent 60%);
       flex-wrap: wrap;
     }
 
-    .grid-2 {
+    .hero-kicker {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    .hero-title {
+      margin: 0;
+      font-size: 25px;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      color: var(--text-primary);
+    }
+
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    /* Top Bento Row: 3x2 KPI Grid on Left + Accounts Overview Card on Right */
+    .bento-top {
       display: grid;
-      grid-template-columns: 1.15fr 0.85fr;
-      gap: 22px;
+      grid-template-columns: 1.55fr 1fr;
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .kpi-grid-6 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    @media (max-width: 1180px) {
+      .bento-top { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 760px) {
+      .kpi-grid-6 { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 520px) {
+      .kpi-grid-6 { grid-template-columns: 1fr; }
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .kpi-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .kpi-label-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .kpi-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .icon-lavender { background: rgba(167, 139, 250, 0.14); color: #A78BFA; }
+    .icon-orange   { background: rgba(255, 90, 38, 0.15);   color: #FF6B3D; }
+    .icon-sky      { background: rgba(56, 189, 248, 0.14);  color: #38BDF8; }
+    .icon-emerald  { background: rgba(16, 185, 129, 0.14);  color: #34D399; }
+    .icon-amber    { background: rgba(245, 158, 11, 0.14);  color: #FBBF24; }
+    .icon-rose     { background: rgba(244, 114, 182, 0.14); color: #F472B6; }
+
+    .kpi-title {
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .kpi-main {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .kpi-value {
+      font-size: 21px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+
+    .kpi-sub {
+      font-size: 11.5px;
+      font-weight: 600;
+    }
+
+    .kpi-footer {
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 11.5px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    /* Toggle Switch */
+    input[type="checkbox"].switch {
+      width: 38px;
+      height: 20px;
+      appearance: none;
+      background: #272B38;
+      border-radius: 999px;
+      position: relative;
+      cursor: pointer;
+      transition: background 150ms ease;
+      flex-shrink: 0;
+      margin: 0;
+    }
+
+    input[type="checkbox"].switch::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2.5px;
+      width: 16px;
+      height: 16px;
+      background: #FFFFFF;
+      border-radius: 50%;
+      transition: transform 150ms ease;
+    }
+
+    input[type="checkbox"].switch:checked {
+      background: var(--accent);
+    }
+
+    input[type="checkbox"].switch:checked::after {
+      transform: translateX(17px);
+    }
+
+    /* Segmented Progress Bar in Accounts Overview Card */
+    .seg-bar {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin: 12px 0 16px;
+    }
+
+    .seg-bar-item {
+      height: 7px;
+      border-radius: 999px;
+      background: #252936;
+      overflow: hidden;
+    }
+
+    .seg-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: transform 200ms ease;
+    }
+
+    /* Account Selector Rows */
+    .account-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      max-height: 185px;
+      overflow-y: auto;
+    }
+
+    .account-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: 10px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: border-color 150ms ease, background 150ms ease;
+    }
+
+    .account-row:hover {
+      background: var(--bg-card-hover);
+    }
+
+    .account-row.active {
+      border-color: var(--accent);
+      background: rgba(255, 90, 38, 0.08);
+    }
+
+    /* Bottom 2-Column Workspace Grid */
+    .bento-bottom {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 16px;
       align-items: start;
     }
 
-    .grid-equal {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 22px;
-      align-items: start;
+    @media (max-width: 1080px) {
+      .bento-bottom { grid-template-columns: 1fr; }
     }
 
-    @media (max-width: 1100px) {
-      .grid-2, .grid-equal { grid-template-columns: 1fr; }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 14px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
     }
 
     .form-2col {
@@ -326,94 +592,32 @@
       gap: 12px;
     }
 
-    .field { margin-bottom: 13px; }
-
-    /* Segmented Auth Mode Switch */
-    .segmented {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 3px;
-      margin-bottom: 18px;
+    @media (max-width: 600px) {
+      .form-2col { grid-template-columns: 1fr; }
     }
-
-    .segmented button {
-      border: none;
-      background: transparent;
-      color: var(--text-secondary);
-      padding: 7px 10px;
-      border-radius: 5px;
-      font-size: 12px;
-    }
-
-    .segmented button.active {
-      background: var(--bg-elevated);
-      color: var(--text-primary);
-    }
-
-    /* Realtime & FBNS Toggle Switches */
-    .switch-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 13px 0;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .switch-row:last-of-type { border-bottom: none; }
-
-    input[type="checkbox"].switch {
-      width: 40px;
-      height: 21px;
-      appearance: none;
-      background: #252E40;
-      border-radius: 12px;
-      position: relative;
-      cursor: pointer;
-      transition: background 150ms ease;
-      flex-shrink: 0;
-    }
-
-    input[type="checkbox"].switch::after {
-      content: "";
-      position: absolute;
-      top: 2.5px;
-      left: 3px;
-      width: 16px;
-      height: 16px;
-      background: #fff;
-      border-radius: 50%;
-      transition: transform 150ms ease;
-    }
-
-    input[type="checkbox"].switch:checked { background: var(--accent); }
-    input[type="checkbox"].switch:checked::after { transform: translateX(18px); }
 
     details.drawer {
       border: 1px solid var(--border);
-      border-radius: 7px;
+      border-radius: 10px;
       background: var(--bg-input);
-      padding: 9px 13px;
+      padding: 10px 14px;
       margin-bottom: 14px;
     }
 
     details.drawer summary {
       cursor: pointer;
       font-size: 12px;
-      font-weight: 500;
+      font-weight: 600;
       color: var(--text-secondary);
       user-select: none;
     }
 
-    /* Simple Live Logs */
+    /* Simple Live Logs Console */
     .log-console {
       background: var(--bg-input);
       border: 1px solid var(--border);
-      border-radius: 7px;
-      height: 250px;
+      border-radius: 10px;
+      height: 240px;
       overflow-y: auto;
       padding: 12px 14px;
       font-size: 12px;
@@ -434,327 +638,550 @@
     .text-ok { color: var(--ok); }
     .text-warn { color: var(--warn); }
     .text-err { color: var(--err); }
+    .text-accent { color: var(--accent); }
   </style>
 </head>
 <body>
-  <!-- Top Bar Contract: Zone 1 Brand | Zone 2 Nav | Zone 3 Primary Action -->
-  <header class="topbar">
-    <a href="#" class="brand-title">Hyper Insta Bridge</a>
-    <nav class="topnav">
-      <a href="#sec-bridge" class="active">Bridge &amp; Accounts</a>
-      <a href="#sec-auth">Authentication</a>
-      <a href="#sec-telegram">Telegram &amp; Bot</a>
-      <a href="#sec-logs">Live Logs</a>
-    </nav>
-    <div>
-      <button class="primary" id="btn-top-download" onclick="downloadActiveSession()" disabled>Download Session JSON</button>
+  <div class="app-frame">
+    <!-- Top Bar Contract: Zone 1 Brand | Zone 2 Pill Nav | Zone 3 User Action -->
+    <header class="topbar">
+      <a href="#" class="brand-mark">
+        <span class="brand-icon">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+          </svg>
+        </span>
+        <span>Hyper Insta</span>
+      </a>
+
+      <nav class="pill-nav" id="top-pill-nav" style="display: none;">
+        <a href="#sec-overview" class="active" onclick="setActiveNav(this)">Overview</a>
+        <a href="#sec-auth" onclick="setActiveNav(this)">Authentication</a>
+        <a href="#sec-telegram" onclick="setActiveNav(this)">Telegram &amp; Topics</a>
+        <a href="#sec-logs" onclick="setActiveNav(this)">Live Console</a>
+      </nav>
+
+      <div class="top-profile" id="top-user-zone">
+        <span style="font-size: 12px; color: var(--text-muted);">Authentication Required</span>
+      </div>
+    </header>
+
+    <!-- 1. AUTHENTICATION GATE (Sign In vs Create Workspace) -->
+    <div id="auth-gate" class="auth-gate-wrap">
+      <div class="auth-gate-card">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 18px;">
+          <div class="brand-icon" style="width: 40px; height: 40px;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+          </div>
+          <div>
+            <h1 style="margin: 0; font-size: 19px; font-weight: 700;">Workspace Access</h1>
+            <div style="font-size: 12px; color: var(--text-secondary);">Sign in to your private database or register a new workspace</div>
+          </div>
+        </div>
+
+        <div class="segmented">
+          <button id="gate-tab-login" class="active" onclick="setGateMode('login')">Sign In</button>
+          <button id="gate-tab-register" onclick="setGateMode('register')">Register Workspace</button>
+        </div>
+
+        <div class="field">
+          <label>Workspace Username</label>
+          <input type="text" id="gate-username" class="mono" placeholder="e.g. rex" autocomplete="username" />
+        </div>
+
+        <div class="field">
+          <label>
+            <span id="gate-pw-label">Workspace Password</span>
+            <span style="font-size: 11px; color: var(--text-muted); cursor: pointer;" onclick="toggleGatePw()">Show / Hide</span>
+          </label>
+          <input type="password" id="gate-password" placeholder="Enter your workspace password" autocomplete="current-password" />
+        </div>
+
+        <div id="gate-hint" style="font-size: 11.5px; color: var(--text-muted); margin-bottom: 14px;">
+          Existing workspaces are password-protected. You can also sign in or register via the Telegram Bot with <code class="mono">/start</code>.
+        </div>
+
+        <div id="gate-error" class="text-err" style="font-size: 12.5px; margin-bottom: 12px; min-height: 18px;"></div>
+
+        <button class="primary" id="gate-submit-btn" onclick="submitWorkspaceAuth()" style="width: 100%; padding: 11px; font-size: 13.5px;">
+          Sign In to Workspace
+        </button>
+      </div>
     </div>
-  </header>
 
-  <div class="app-shell">
-    <!-- Sidebar: User Workspaces + Instagram Accounts + Bot DM Info -->
-    <aside class="sidebar">
-      <div>
-        <div class="section-kicker">
-          <span>User Workspace DB</span>
-        </div>
-        <div style="display: flex; gap: 6px; margin-bottom: 10px;">
-          <input type="text" id="sidebar-user-input" class="mono" placeholder="Username (no pass)..." />
-          <button class="primary" onclick="openUserFromSidebar()">Open</button>
-        </div>
-        <div id="user-list" class="nav-list"></div>
-      </div>
+    <!-- 2. AUTHENTICATED DASHBOARD VIEWPORT -->
+    <main id="dashboard-view" class="dashboard-body" style="display: none;">
 
-      <div id="sidebar-ig-wrap" style="display: none; flex-direction: column; flex: 1;">
-        <div class="section-kicker">
-          <span>Instagram Accounts</span>
-          <button onclick="selectIgAccount('__NEW__')" style="padding: 3px 9px; font-size: 11px;">+ Add IG</button>
+      <!-- 2FA / Challenge Code Prompt Banner -->
+      <div id="code-banner" style="display: none; margin-top: 18px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.45); border-radius: 14px; padding: 14px 20px; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+        <div>
+          <div style="font-weight: 700; color: var(--warn);">Instagram Verification / 2FA Code Required</div>
+          <div id="code-hint" style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;"></div>
         </div>
-        <div id="ig-list" class="nav-list"></div>
-      </div>
-
-      <div style="border-top: 1px solid var(--border); padding-top: 14px; font-size: 12px; color: var(--text-secondary);">
-        <div>Active DB: <strong id="meta-user" class="mono">None</strong></div>
-        <div id="meta-bot-hint" style="font-size: 11.5px; color: var(--text-muted); margin-top: 4px;">
-          Start the Telegram Bot in private chat with <code class="mono">/start</code> to manage directly from Telegram.
-        </div>
-      </div>
-    </aside>
-
-    <!-- Main Viewport -->
-    <main class="viewport">
-      <!-- Welcome / Onboarding View when no User DB is open -->
-      <div id="welcome-view" class="panel" style="text-align: center; padding: 56px 24px;">
-        <h2 style="margin: 0 0 8px 0; font-size: 20px;">Open or Register Your User Workspace</h2>
-        <p style="color: var(--text-secondary); max-width: 520px; margin: 0 auto 22px;">
-          Enter your username to create or open your database (no password required), or send <code class="mono">/start</code> directly to the Telegram Bot in private chat. Inside your workspace you can add multiple Instagram accounts and choose which account to attach to the Telegram bridge.
-        </p>
-        <div style="display: flex; gap: 8px; max-width: 360px; margin: 0 auto;">
-          <input type="text" id="welcome-user-input" class="mono" placeholder="e.g. rex or arshman" />
-          <button class="primary" onclick="openUserFromWelcome()">Open Workspace</button>
+        <div style="display: flex; gap: 8px;">
+          <input type="text" id="code-input" class="mono" placeholder="6 or 8 digit code" style="width: 175px;" />
+          <button class="primary" onclick="submitCode()">Submit Code</button>
         </div>
       </div>
 
-      <!-- Active Workspace View -->
-      <div id="workspace-view" style="display: none; flex-direction: column; gap: 22px;">
-
-        <!-- 2FA / Challenge Code Prompt Banner -->
-        <div id="code-banner" style="display: none; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 10px; padding: 14px 20px; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
-          <div>
-            <div style="font-weight: 600; color: var(--warn);">Instagram Verification / 2FA Code Required</div>
-            <div id="code-hint" style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;"></div>
-          </div>
-          <div style="display: flex; gap: 8px;">
-            <input type="text" id="code-input" class="mono" placeholder="6 or 8 digit code" style="width: 175px;" />
-            <button class="primary" onclick="submitCode()">Submit Code</button>
-          </div>
+      <!-- Hero Greeting Header -->
+      <section id="sec-overview" class="hero-banner">
+        <div>
+          <div class="hero-kicker" id="hero-greeting">Welcome back 👋</div>
+          <h1 class="hero-title" id="hero-headline">Here's Your Bridge Overview</h1>
         </div>
 
-        <!-- Selected Account Header & Bridge Attachment Selector -->
-        <section id="sec-bridge" class="bridge-bar">
-          <div>
-            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-              <span class="mono" style="font-size: 17px; font-weight: 700;" id="header-ig-handle">@account</span>
-              <span id="header-ig-status" class="text-warn" style="font-size: 12.5px; font-weight: 600;">Not logged in</span>
-              <span style="color: var(--text-muted);">·</span>
-              <span id="header-bridge-state" style="font-size: 12.5px; color: var(--text-secondary);">Not attached to bridge</span>
+        <div class="hero-actions">
+          <button onclick="selectIgAccount('__NEW__')">+ Add IG Account</button>
+          <button id="btn-hero-relogin" onclick="reloginSlot()" disabled>Relogin</button>
+          <button id="btn-hero-download" onclick="downloadActiveSession()" disabled>Download .json</button>
+          <button id="btn-attach-bridge" class="primary" onclick="attachCurrentToBridge()" disabled>Attach to Bridge</button>
+        </div>
+      </section>
+
+      <!-- Top Bento Grid: 6 KPI Cards (Left) + Instagram Accounts & Bridge Matrix (Right) -->
+      <section class="bento-top">
+        <div class="kpi-grid-6">
+          <!-- KPI 1: Instagram Auth Status -->
+          <div class="card">
+            <div class="kpi-top">
+              <div class="kpi-label-group">
+                <div class="kpi-icon icon-lavender">IG</div>
+                <span class="kpi-title">Instagram Session</span>
+              </div>
             </div>
-            <div class="meta-inline" id="header-ig-metrics" style="margin-top: 4px;">
-              Select an Instagram account from the left sidebar or add a new account below.
+            <div class="kpi-main">
+              <span class="kpi-value tabular" id="kpi-ig-status">Offline</span>
+              <span class="kpi-sub mono" id="kpi-ig-method">none</span>
+            </div>
+            <div class="kpi-footer">
+              <span id="kpi-ig-handle" class="mono">@none</span>
+              <span>Selected Slot</span>
             </div>
           </div>
 
-          <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-            <button id="btn-attach-bridge" class="primary" onclick="attachCurrentToBridge()" disabled>Attach to Telegram Bridge</button>
-            <button id="btn-bar-relogin" onclick="reloginSlot()" disabled>Relogin</button>
-            <button id="btn-bar-download" onclick="downloadActiveSession()" disabled>Download .json</button>
-          </div>
-        </section>
-
-        <!-- Row 1: Authentication Studio + Realtime/FBNS & Device Inspector -->
-        <section id="sec-auth" class="grid-2">
-          <!-- Left: Instagram Login (Password / Cookie / Session JSON) -->
-          <div class="panel">
-            <div class="panel-header">
-              <h2 class="panel-title" id="auth-card-title">Instagram Authentication</h2>
-              <div class="meta-inline">
-                <span id="auth-mode-caption">Realtime &amp; FBNS auto-enabled on password login</span>
+          <!-- KPI 2: Telegram Bridge Route -->
+          <div class="card">
+            <div class="kpi-top">
+              <div class="kpi-label-group">
+                <div class="kpi-icon icon-sky">TG</div>
+                <span class="kpi-title">Telegram Bridge</span>
               </div>
             </div>
-
-            <div class="segmented">
-              <button id="tab-pw" class="active" onclick="setAuthTab('password')">Password Login</button>
-              <button id="tab-ck" onclick="setAuthTab('cookie')">Cookie Login</button>
-              <button id="tab-js" onclick="setAuthTab('json')">Import Session JSON</button>
+            <div class="kpi-main">
+              <span class="kpi-value tabular" id="kpi-bridge-state">Standby</span>
+              <span class="kpi-sub mono" id="kpi-bridge-bot">No bot</span>
             </div>
-
-            <div class="field">
-              <label>Instagram Username</label>
-              <input type="text" id="ig-username" class="mono" placeholder="e.g. i.tompatrick" />
+            <div class="kpi-footer">
+              <span id="kpi-bridge-group" class="mono">Group: unset</span>
+              <span>Forum Route</span>
             </div>
-
-            <!-- Tab 1: Password Login -->
-            <div id="pane-password">
-              <div class="form-2col">
-                <div class="field">
-                  <label>Password <span id="pw-saved-badge" class="text-ok"></span></label>
-                  <input type="password" id="ig-password" placeholder="Instagram password" />
-                </div>
-                <div class="field">
-                  <label>HTTP / SOCKS5 Proxy (Optional)</label>
-                  <input type="text" id="ig-proxy" class="mono" placeholder="http://user:pass@host:port" />
-                </div>
-              </div>
-
-              <details class="drawer">
-                <summary>2FA TOTP Secret &amp; Device Region Settings (Optional)</summary>
-                <div class="form-2col" style="margin-top: 10px;">
-                  <div class="field">
-                    <label>2FA TOTP Secret (Base32) <span id="totp-saved-badge" class="text-ok"></span></label>
-                    <input type="password" id="ig-totp" class="mono" placeholder="Authenticator secret" />
-                  </div>
-                  <div class="field">
-                    <label>Challenge Phone Number</label>
-                    <input type="text" id="ig-phone" class="mono" placeholder="+1..." />
-                  </div>
-                </div>
-                <div class="form-2col">
-                  <div class="field" style="margin-bottom: 0;">
-                    <label>Locale &amp; Country</label>
-                    <div style="display: flex; gap: 6px;">
-                      <input type="text" id="ig-locale" class="mono" placeholder="en_US" />
-                      <input type="text" id="ig-country" class="mono" placeholder="US" style="width: 75px;" />
-                    </div>
-                  </div>
-                  <div class="field" style="margin-bottom: 0;">
-                    <label>Timezone Offset (Seconds)</label>
-                    <input type="number" id="ig-tz" class="mono" placeholder="e.g. 18000" />
-                  </div>
-                </div>
-              </details>
-
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px;">
-                <span style="font-size: 12px; color: var(--text-muted);">Auto-enables Realtime MQTT &amp; FBNS</span>
-                <button class="primary" id="btn-pw-login" onclick="loginPassword()">Login with Password</button>
-              </div>
-            </div>
-
-            <!-- Tab 2: Cookie Login -->
-            <div id="pane-cookie" style="display: none;">
-              <div class="field">
-                <label>Browser Cookie (sessionid value, Cookie header, or JSON cookie export)</label>
-                <textarea id="ig-cookie" class="mono" rows="3" placeholder="Paste sessionid cookie or full JSON cookie array"></textarea>
-              </div>
-              <div class="field">
-                <label>HTTP / SOCKS5 Proxy (Optional)</label>
-                <input type="text" id="ig-cookie-proxy" class="mono" placeholder="http://user:pass@host:port" />
-              </div>
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px;">
-                <span style="font-size: 12px; color: var(--text-muted);">Auto-disables Realtime MQTT &amp; FBNS</span>
-                <button class="primary" id="btn-ck-login" onclick="loginCookie()">Login with Cookie</button>
-              </div>
-            </div>
-
-            <!-- Tab 3: Import Session JSON -->
-            <div id="pane-json" style="display: none;">
-              <div class="field">
-                <label>Paste instagrapi Session JSON or Upload .json File</label>
-                <textarea id="ig-session-json" class="mono" rows="3" placeholder='{"uuids": {...}, "authorization_data": {...}}'></textarea>
-              </div>
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
-                <input type="file" accept=".json,application/json" onchange="loadJsonFile(event)" style="font-size: 12px; max-width: 230px;" />
-                <button class="primary" onclick="importSession()">Import &amp; Verify Session</button>
-              </div>
-            </div>
-
-            <div id="auth-feedback" style="font-size: 12.5px; margin-top: 12px; min-height: 18px;"></div>
           </div>
 
-          <!-- Right: Realtime & FBNS Switches + Device & Session Inspector -->
-          <div class="panel">
-            <div class="panel-header">
-              <h2 class="panel-title">Realtime Channels &amp; Device Session</h2>
-              <div class="meta-inline">
-                <span id="rt-header-summary" class="mono">MQTT: off · FBNS: off</span>
-              </div>
-            </div>
-
-            <!-- Only the 2 requested toggles: Realtime MQTT and FBNS Push -->
-            <div class="switch-row">
-              <div>
-                <div style="font-weight: 600; font-size: 13.5px;">Realtime MQTT</div>
-                <div style="font-size: 12px; color: var(--text-secondary);" id="rt-desc">edge-mqtt.facebook.com live DM &amp; typing stream</div>
+          <!-- KPI 3: Realtime MQTT -->
+          <div class="card">
+            <div class="kpi-top">
+              <div class="kpi-label-group">
+                <div class="kpi-icon icon-orange">⚡</div>
+                <span class="kpi-title">Realtime MQTT</span>
               </div>
               <input type="checkbox" class="switch" id="sw-realtime" onchange="toggleRealtime('realtime', this.checked)" disabled />
             </div>
+            <div class="kpi-main">
+              <span class="kpi-value tabular" id="kpi-rt-state">OFF</span>
+              <span class="kpi-sub mono text-ok" id="kpi-rt-events">0 events</span>
+            </div>
+            <div class="kpi-footer">
+              <span id="kpi-rt-foot">edge-mqtt.facebook.com</span>
+            </div>
+          </div>
 
-            <div class="switch-row">
-              <div>
-                <div style="font-weight: 600; font-size: 13.5px;">FBNS Push</div>
-                <div style="font-size: 12px; color: var(--text-secondary);" id="fbns-desc">mqtt-mini.facebook.com push notification channel</div>
+          <!-- KPI 4: FBNS Push -->
+          <div class="card">
+            <div class="kpi-top">
+              <div class="kpi-label-group">
+                <div class="kpi-icon icon-emerald">🔔</div>
+                <span class="kpi-title">FBNS Push</span>
               </div>
               <input type="checkbox" class="switch" id="sw-fbns" onchange="toggleRealtime('fbns', this.checked)" disabled />
             </div>
+            <div class="kpi-main">
+              <span class="kpi-value tabular" id="kpi-fbns-state">OFF</span>
+              <span class="kpi-sub mono text-ok" id="kpi-fbns-pushes">0 pushes</span>
+            </div>
+            <div class="kpi-footer">
+              <span id="kpi-fbns-foot">mqtt-mini.facebook.com</span>
+            </div>
+          </div>
 
-            <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
-              <div class="section-kicker"><span>Simulated Android Device &amp; Session</span></div>
-              <pre id="device-info-pre" class="mono" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 7px; padding: 11px 13px; font-size: 11.5px; color: var(--text-secondary); margin: 0 0 14px 0; white-space: pre-wrap;">No active session</pre>
-              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                <button id="btn-reset-device" onclick="resetDevice()" disabled>Reset Device UUID</button>
-                <button id="btn-logout-slot" onclick="logoutSlot()" disabled>Logout</button>
-                <button id="btn-remove-slot" class="danger" onclick="removeSlot()" style="margin-left: auto;" disabled>Remove Account</button>
+          <!-- KPI 5: Bridged Topics -->
+          <div class="card">
+            <div class="kpi-top">
+              <div class="kpi-label-group">
+                <div class="kpi-icon icon-amber">#</div>
+                <span class="kpi-title">Bridged Topics</span>
+              </div>
+            </div>
+            <div class="kpi-main">
+              <span class="kpi-value tabular" id="kpi-topics-count">0</span>
+              <span class="kpi-sub text-secondary">Forum Threads</span>
+            </div>
+            <div class="kpi-footer">
+              <span>Auto-synced per DM thread</span>
+            </div>
+          </div>
+
+          <!-- KPI 6: Forwarded Messages -->
+          <div class="card">
+            <div class="kpi-top">
+              <div class="kpi-label-group">
+                <div class="kpi-icon icon-rose">⇄</div>
+                <span class="kpi-title">DMs Forwarded</span>
+              </div>
+            </div>
+            <div class="kpi-main">
+              <span class="kpi-value tabular" id="kpi-forwarded-count">0</span>
+              <span class="kpi-sub mono" id="kpi-proxy-state">Direct</span>
+            </div>
+            <div class="kpi-footer">
+              <span id="kpi-storage-badge" class="mono">MongoDB</span>
+              <span>Isolated DB</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Overview Card: Instagram Accounts & Bridge Switcher -->
+        <div class="card">
+          <div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+              <div>
+                <div style="font-size: 14.5px; font-weight: 700;">Instagram Accounts Matrix</div>
+                <div style="font-size: 12px; color: var(--text-secondary);" id="matrix-subtitle">Select an account to inspect or attach to bridge</div>
+              </div>
+              <button onclick="selectIgAccount('__NEW__')" style="padding: 6px 11px; font-size: 11.5px;">+ Add IG</button>
+            </div>
+
+            <div class="seg-bar">
+              <div class="seg-bar-item"><div class="seg-bar-fill" style="background: var(--accent); width: 100%;"></div></div>
+              <div class="seg-bar-item"><div class="seg-bar-fill" style="background: var(--ok); width: 100%;"></div></div>
+              <div class="seg-bar-item"><div class="seg-bar-fill" style="background: #38BDF8; width: 100%;"></div></div>
+            </div>
+
+            <div id="ig-list" class="account-list"></div>
+          </div>
+
+          <div class="kpi-footer" style="margin-top: 14px;">
+            <span id="bot-dm-hint">Manage directly in Telegram Bot with <code class="mono">/start</code></span>
+            <span class="mono" id="bridged-account-pill">Bridge: None</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Bottom Split Section: Authentication & Device Studio (Left) + Telegram Routing & Topics (Right) -->
+      <section class="bento-bottom">
+        <!-- Left Card: Instagram Authentication & Simulated Device Studio -->
+        <div id="sec-auth" class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Instagram Authentication &amp; Device Studio</h2>
+              <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;" id="auth-mode-caption">
+                Password login automatically enables Realtime MQTT &amp; FBNS
               </div>
             </div>
           </div>
-        </section>
 
-        <!-- Row 2: Telegram Bot / Forum Group Config + Bridged Topics & Bot Command Console -->
-        <section id="sec-telegram" class="grid-equal">
-          <div class="panel">
-            <div class="panel-header">
-              <h2 class="panel-title">Telegram Bot &amp; Forum Group Routing</h2>
-              <div class="meta-inline">
-                <span id="tg-conn-label" class="text-warn">Not connected</span>
-              </div>
-            </div>
+          <div class="segmented three">
+            <button id="tab-pw" class="active" onclick="setAuthTab('password')">Password Login</button>
+            <button id="tab-ck" onclick="setAuthTab('cookie')">Cookie Login</button>
+            <button id="tab-js" onclick="setAuthTab('json')">Session JSON</button>
+          </div>
 
-            <p style="margin: 0 0 14px 0; font-size: 12px; color: var(--text-secondary);">
-              Commands and account management run <strong>directly in the Bot's private chat</strong> (<code class="mono" id="bot-dm-handle">@bot</code> → send <code class="mono">/start</code>). Your Forum Group (<code class="mono">-100...</code>) is used purely for Instagram DM conversation topics.
-            </p>
+          <div class="field">
+            <label>Instagram Username</label>
+            <input type="text" id="ig-username" class="mono" placeholder="e.g. i.tompatrick" />
+          </div>
 
+          <!-- Tab 1: Password Login -->
+          <div id="pane-password">
             <div class="form-2col">
               <div class="field">
-                <label>Forum Group Chat ID (Topics)</label>
-                <input type="text" id="tg-chat-id" class="mono" placeholder="-1001234567890" />
+                <label>Instagram Password <span id="pw-saved-badge" class="text-ok"></span></label>
+                <input type="password" id="ig-password" placeholder="Instagram password" />
               </div>
               <div class="field">
-                <label>Your Telegram User ID (Bot DM Admin)</label>
-                <input type="text" id="tg-admin-id" class="mono" placeholder="Numeric user ID" />
+                <label>HTTP / SOCKS5 Proxy (Optional)</label>
+                <input type="text" id="ig-proxy" class="mono" placeholder="http://user:pass@host:port" />
               </div>
             </div>
 
-            <div class="field">
-              <label>Custom Bot Token (Optional — leave blank to use default bot)</label>
-              <input type="password" id="tg-token" class="mono" placeholder="Uses server TELEGRAM_BOT_TOKEN if blank" />
-            </div>
+            <details class="drawer">
+              <summary>2FA TOTP Secret &amp; Device Region Settings (Optional)</summary>
+              <div class="form-2col" style="margin-top: 10px;">
+                <div class="field">
+                  <label>2FA TOTP Secret (Base32) <span id="totp-saved-badge" class="text-ok"></span></label>
+                  <input type="password" id="ig-totp" class="mono" placeholder="Authenticator secret" />
+                </div>
+                <div class="field">
+                  <label>Challenge Phone Number</label>
+                  <input type="text" id="ig-phone" class="mono" placeholder="+1..." />
+                </div>
+              </div>
+              <div class="form-2col">
+                <div class="field" style="margin-bottom: 0;">
+                  <label>Locale &amp; Country</label>
+                  <div style="display: flex; gap: 6px;">
+                    <input type="text" id="ig-locale" class="mono" placeholder="en_US" />
+                    <input type="text" id="ig-country" class="mono" placeholder="US" style="width: 78px;" />
+                  </div>
+                </div>
+                <div class="field" style="margin-bottom: 0;">
+                  <label>Timezone Offset (Seconds)</label>
+                  <input type="number" id="ig-tz" class="mono" placeholder="e.g. 18000" />
+                </div>
+              </div>
+            </details>
 
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px;">
-              <span id="tg-feedback" style="font-size: 12px; color: var(--text-secondary);"></span>
-              <button class="primary" onclick="saveTelegram()">Save Telegram Settings</button>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+              <span style="font-size: 12px; color: var(--text-muted);">Auto-enables Realtime MQTT &amp; FBNS</span>
+              <button class="primary" id="btn-pw-login" onclick="loginPassword()">Login with Password</button>
             </div>
           </div>
 
-          <div class="panel">
-            <div class="panel-header">
-              <h2 class="panel-title">Bridged Topics &amp; Command Runner</h2>
-              <div class="meta-inline">
-                <span id="topics-count-label" class="mono">0 linked topics</span>
+          <!-- Tab 2: Cookie Login -->
+          <div id="pane-cookie" style="display: none;">
+            <div class="field">
+              <label>Browser Cookie (sessionid value, Cookie header, or JSON cookie export)</label>
+              <textarea id="ig-cookie" class="mono" rows="3" placeholder="Paste sessionid cookie or full JSON cookie array"></textarea>
+            </div>
+            <div class="field">
+              <label>HTTP / SOCKS5 Proxy (Optional)</label>
+              <input type="text" id="ig-cookie-proxy" class="mono" placeholder="http://user:pass@host:port" />
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+              <span style="font-size: 12px; color: var(--text-muted);">Auto-disables Realtime MQTT &amp; FBNS</span>
+              <button class="primary" id="btn-ck-login" onclick="loginCookie()">Login with Cookie</button>
+            </div>
+          </div>
+
+          <!-- Tab 3: Session JSON -->
+          <div id="pane-json" style="display: none;">
+            <div class="field">
+              <label>Paste instagrapi Session JSON or Upload .json File</label>
+              <textarea id="ig-session-json" class="mono" rows="3" placeholder='{"uuids": {...}, "authorization_data": {...}}'></textarea>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+              <input type="file" accept=".json,application/json" onchange="loadJsonFile(event)" style="font-size: 12px; max-width: 230px;" />
+              <button class="primary" onclick="importSession()">Import &amp; Verify Session</button>
+            </div>
+          </div>
+
+          <div id="auth-feedback" style="font-size: 12.5px; margin-top: 12px; min-height: 18px;"></div>
+
+          <!-- Simulated Android Device & Session Actions -->
+          <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
+            <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px;">
+              Simulated Android Device &amp; Session Telemetry
+            </div>
+            <pre id="device-info-pre" class="mono" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px; font-size: 11.5px; color: var(--text-secondary); margin: 0 0 12px 0; white-space: pre-wrap;">No active session</pre>
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <button id="btn-reset-device" onclick="resetDevice()" disabled>Reset Device UUID</button>
+              <button id="btn-logout-slot" onclick="logoutSlot()" disabled>Logout IG</button>
+              <button id="btn-remove-slot" class="danger" onclick="removeSlot()" style="margin-left: auto;" disabled>Remove Account</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Card: Telegram Bot Routing, Bridged Topics & Direct Command Bar -->
+        <div id="sec-telegram" class="card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Telegram Bot &amp; Forum Group Routing</h2>
+              <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+                Commands execute directly in your Bot DM · Forum Group hosts DM topics
               </div>
             </div>
+            <span id="tg-conn-label" class="text-warn" style="font-size: 12px; font-weight: 600;">Not connected</span>
+          </div>
 
-            <div style="display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap;">
-              <input type="text" id="cmd-input" class="mono" placeholder="Execute bot command (/status, /session, /ping, /help)" style="flex: 1;" />
-              <button class="primary" onclick="runBotCommand()">Execute</button>
+          <div class="form-2col">
+            <div class="field">
+              <label>Forum Group Chat ID (Topics)</label>
+              <input type="text" id="tg-chat-id" class="mono" placeholder="-1001234567890" />
+            </div>
+            <div class="field">
+              <label>Telegram Admin User ID (Bot DM)</label>
+              <input type="text" id="tg-admin-id" class="mono" placeholder="Numeric user ID" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Telegram Bot Token (Set or Override BotFather Token)</label>
+            <input type="password" id="tg-token" class="mono" placeholder="Paste BotFather token to set or update bot" />
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px;">
+            <span id="tg-feedback" style="font-size: 12px; color: var(--text-secondary);"></span>
+            <button class="primary" onclick="saveTelegram()">Save Telegram Settings</button>
+          </div>
+
+          <div style="padding-top: 16px; border-top: 1px solid var(--border);">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+              <span style="font-size: 13px; font-weight: 700;">Direct Bot Command Runner &amp; Bridged Topics</span>
+              <span id="topics-count-label" class="mono" style="font-size: 12px; color: var(--text-secondary);">0 topics</span>
+            </div>
+
+            <div style="display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;">
+              <input type="text" id="cmd-input" class="mono" placeholder="Run command (/status, /session, /relogin, /help)" style="flex: 1;" />
+              <button class="primary" onclick="runBotCommand()">Run</button>
               <button onclick="quickCmd('/status')">/status</button>
               <button onclick="quickCmd('/session')">/session</button>
             </div>
 
-            <div id="topics-list" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 7px; max-height: 150px; overflow-y: auto; padding: 10px 13px; font-size: 12px;"></div>
+            <div id="topics-list" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; max-height: 175px; overflow-y: auto; padding: 10px 14px; font-size: 12px;"></div>
           </div>
-        </section>
+        </div>
+      </section>
 
-        <!-- Row 3: Simple Live Logs -->
-        <section id="sec-logs" class="panel">
-          <div class="panel-header" style="margin-bottom: 12px; padding-bottom: 12px;">
-            <h2 class="panel-title">Live Logs</h2>
-            <div style="display: flex; gap: 8px;">
-              <button onclick="downloadLogs()" style="padding: 5px 11px; font-size: 12px;">Download</button>
-              <button onclick="clearLogs()" style="padding: 5px 11px; font-size: 12px;">Clear</button>
-            </div>
+      <!-- Live Logs Console -->
+      <section id="sec-logs" class="card">
+        <div class="card-header" style="margin-bottom: 12px; padding-bottom: 12px;">
+          <div>
+            <h2 class="card-title">Live Workspace Logs</h2>
+            <div style="font-size: 12px; color: var(--text-secondary);">Real-time stream for your authenticated workspace</div>
           </div>
-          <div id="log-box" class="log-console mono"></div>
-        </section>
+          <div style="display: flex; gap: 8px;">
+            <button onclick="downloadLogs()">Download Logs</button>
+            <button onclick="clearLogs()">Clear</button>
+          </div>
+        </div>
+        <div id="log-box" class="log-console mono"></div>
+      </section>
 
-      </div>
     </main>
   </div>
 
   <script>
-    let currentUser = localStorage.getItem('hib_active_user') || '';
+    let currentUser = localStorage.getItem('hib_auth_user') || '';
+    let authToken = localStorage.getItem('hib_auth_token') || '';
+    let gateMode = 'login';
     let activeIg = '';
     let authTab = 'password';
     let lastLogId = 0;
     let logs = [];
     let hydratedKey = '';
 
+    function setActiveNav(el) {
+      document.querySelectorAll('#top-pill-nav a').forEach(a => a.classList.remove('active'));
+      el.classList.add('active');
+    }
+
+    function setGateMode(mode) {
+      gateMode = mode;
+      document.getElementById('gate-tab-login').className = mode === 'login' ? 'active' : '';
+      document.getElementById('gate-tab-register').className = mode === 'register' ? 'active' : '';
+      document.getElementById('gate-pw-label').textContent = mode === 'login' ? 'Workspace Password' : 'Create Workspace Password (min 4 chars)';
+      document.getElementById('gate-submit-btn').textContent = mode === 'login' ? 'Sign In to Workspace' : 'Create & Open Workspace';
+      document.getElementById('gate-error').textContent = '';
+    }
+
+    function toggleGatePw() {
+      const inp = document.getElementById('gate-password');
+      inp.type = inp.type === 'password' ? 'text' : 'password';
+    }
+
     async function api(path, options = {}) {
-      const res = await fetch(path, {
-        headers: { 'Content-Type': 'application/json' },
-        ...options
-      });
+      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      if (authToken) headers['X-Auth-Token'] = authToken;
+      const res = await fetch(path, { ...options, headers });
       const data = await res.json();
+      if (res.status === 401 && path.startsWith('/api/users/')) {
+        signOutWorkspace();
+        throw new Error(data.error || 'Please sign in to access this workspace.');
+      }
       if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
       return data;
+    }
+
+    async function submitWorkspaceAuth() {
+      const uname = document.getElementById('gate-username').value.trim();
+      const pw = document.getElementById('gate-password').value.trim();
+      const errEl = document.getElementById('gate-error');
+      const btn = document.getElementById('gate-submit-btn');
+      errEl.textContent = '';
+
+      if (!uname) {
+        errEl.textContent = 'Please enter your workspace username.';
+        return;
+      }
+      if (!pw || pw.length < 4) {
+        errEl.textContent = 'Please enter a password (at least 4 characters).';
+        return;
+      }
+
+      btn.disabled = true;
+      try {
+        const endpoint = gateMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+        const res = await api(endpoint, {
+          method: 'POST',
+          body: JSON.stringify({ username: uname, password: pw })
+        });
+        currentUser = res.username;
+        authToken = res.token;
+        localStorage.setItem('hib_auth_user', currentUser);
+        localStorage.setItem('hib_auth_token', authToken);
+        document.getElementById('gate-password').value = '';
+        activeIg = res.state.bridged_ig || res.state.active_ig || '';
+        logs = [];
+        lastLogId = 0;
+        hydratedKey = '';
+        await syncAuthUI();
+      } catch (e) {
+        errEl.textContent = e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function signOutWorkspace() {
+      currentUser = '';
+      authToken = '';
+      localStorage.removeItem('hib_auth_user');
+      localStorage.removeItem('hib_auth_token');
+      activeIg = '';
+      logs = [];
+      lastLogId = 0;
+      hydratedKey = '';
+      syncAuthUI();
+    }
+
+    async function syncAuthUI() {
+      const gate = document.getElementById('auth-gate');
+      const dash = document.getElementById('dashboard-view');
+      const pillNav = document.getElementById('top-pill-nav');
+      const topUser = document.getElementById('top-user-zone');
+
+      if (!currentUser || !authToken) {
+        gate.style.display = 'flex';
+        dash.style.display = 'none';
+        pillNav.style.display = 'none';
+        topUser.innerHTML = `<span style="font-size: 12px; color: var(--text-muted);">Authentication Required</span>`;
+        return;
+      }
+
+      gate.style.display = 'none';
+      dash.style.display = 'flex';
+      pillNav.style.display = 'flex';
+      topUser.innerHTML = `
+        <div class="avatar-circle">${escapeHtml(currentUser.slice(0, 2))}</div>
+        <div style="line-height: 1.25;">
+          <div style="font-weight: 700; font-size: 13px;" class="mono">@${escapeHtml(currentUser)}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">Workspace Admin</div>
+        </div>
+        <button onclick="signOutWorkspace()" style="padding: 6px 11px; font-size: 11.5px; margin-left: 4px;">Sign Out</button>
+      `;
+      await refreshState();
     }
 
     function setAuthTab(tab) {
@@ -767,84 +1194,8 @@
       document.getElementById('pane-json').style.display = tab === 'json' ? 'block' : 'none';
       document.getElementById('auth-mode-caption').textContent =
         tab === 'password'
-          ? 'Realtime & FBNS auto-enabled on password login'
-          : (tab === 'cookie' ? 'Realtime & FBNS auto-disabled on cookie login' : 'Restore an instagrapi session JSON file');
-    }
-
-    async function loadUsers() {
-      try {
-        const userListEl = document.getElementById('user-list');
-
-        if (!currentUser) {
-          userListEl.innerHTML = '<div style="font-size: 12px; color: var(--text-muted); padding: 4px 0;">Not signed in. Enter your username above.</div>';
-          document.getElementById('welcome-view').style.display = 'block';
-          document.getElementById('workspace-view').style.display = 'none';
-          document.getElementById('sidebar-ig-wrap').style.display = 'none';
-          document.getElementById('meta-user').textContent = 'None';
-          return;
-        }
-
-        userListEl.innerHTML = `
-          <div class="nav-item active" style="cursor: default;">
-            <span class="mono">${currentUser}</span>
-            <button onclick="logoutWorkspace()" style="padding: 2px 8px; font-size: 11px;">Switch / Exit</button>
-          </div>
-        `;
-
-        document.getElementById('welcome-view').style.display = 'none';
-        document.getElementById('workspace-view').style.display = 'flex';
-        document.getElementById('sidebar-ig-wrap').style.display = 'flex';
-        await refreshState();
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    async function openUser(raw) {
-      const clean = (raw || '').trim();
-      if (!clean) return;
-      const res = await api('/api/users', {
-        method: 'POST',
-        body: JSON.stringify({ username: clean })
-      });
-      currentUser = res.username;
-      localStorage.setItem('hib_active_user', currentUser);
-      activeIg = res.state.bridged_ig || res.state.active_ig || '';
-      logs = [];
-      lastLogId = 0;
-      hydratedKey = '';
-      await loadUsers();
-    }
-
-    function logoutWorkspace() {
-      currentUser = '';
-      localStorage.removeItem('hib_active_user');
-      activeIg = '';
-      logs = [];
-      lastLogId = 0;
-      hydratedKey = '';
-      loadUsers();
-    }
-
-    function openUserFromSidebar() {
-      const inp = document.getElementById('sidebar-user-input');
-      openUser(inp.value);
-      inp.value = '';
-    }
-
-    function openUserFromWelcome() {
-      const inp = document.getElementById('welcome-user-input');
-      openUser(inp.value);
-    }
-
-    async function switchUser(uname) {
-      currentUser = uname;
-      localStorage.setItem('hib_active_user', currentUser);
-      activeIg = '';
-      logs = [];
-      lastLogId = 0;
-      hydratedKey = '';
-      await loadUsers();
+          ? 'Password login automatically enables Realtime MQTT & FBNS'
+          : (tab === 'cookie' ? 'Cookie login automatically disables Realtime MQTT & FBNS' : 'Restore an instagrapi session JSON file');
     }
 
     function selectIgAccount(igName) {
@@ -857,19 +1208,24 @@
         document.getElementById('ig-cookie').value = '';
         document.getElementById('ig-proxy').value = '';
         document.getElementById('ig-cookie-proxy').value = '';
+        document.getElementById('sec-auth').scrollIntoView({ behavior: 'smooth' });
       }
       refreshState();
     }
 
     async function refreshState() {
-      if (!currentUser) return;
+      if (!currentUser || !authToken) return;
       try {
         const st = await api(`/api/users/${encodeURIComponent(currentUser)}/state`);
-        document.getElementById('meta-user').textContent = st.username;
+        document.getElementById('hero-greeting').textContent = `Welcome back, @${st.username} 👋`;
+        document.getElementById('kpi-storage-badge').textContent = st.storage_backend || 'MongoDB';
+
         if (st.tg_bot_username) {
-          document.getElementById('bot-dm-handle').textContent = '@' + st.tg_bot_username;
-          document.getElementById('meta-bot-hint').innerHTML =
-            `Bot: <strong class="mono">@${st.tg_bot_username}</strong> — send <code class="mono">/start</code> in Telegram DM to manage directly from Telegram.`;
+          document.getElementById('bot-dm-hint').innerHTML =
+            `Bot <strong class="mono">@${escapeHtml(st.tg_bot_username)}</strong> online · Send <code class="mono">/start</code> in DM`;
+        } else if (st.tg_error) {
+          document.getElementById('bot-dm-hint').innerHTML =
+            `<span class="text-warn">${escapeHtml(st.tg_error.slice(0, 72))}</span>`;
         }
 
         const accounts = st.accounts || [];
@@ -880,35 +1236,53 @@
           activeIg = accounts[0] ? accounts[0].ig_username : '__NEW__';
         }
 
-        // Sidebar Instagram accounts list with Bridge indicator
+        const onlineCount = accounts.filter(a => a.ig_logged_in).length;
+        document.getElementById('matrix-subtitle').textContent =
+          `${accounts.length} account(s) in workspace · ${onlineCount} logged in`;
+        document.getElementById('bridged-account-pill').textContent =
+          st.bridged_ig ? `Bridged: @${st.bridged_ig}` : 'Bridge: None';
+
         const igListEl = document.getElementById('ig-list');
         if (accounts.length === 0) {
-          igListEl.innerHTML = '<div style="font-size: 12px; color: var(--text-muted); padding: 4px 0;">No Instagram accounts yet.</div>';
+          igListEl.innerHTML = `
+            <div style="padding: 18px; text-align: center; color: var(--text-muted); font-size: 12.5px;">
+              No Instagram accounts added yet. Use the Authentication Studio below to log in.
+            </div>
+          `;
         } else {
           igListEl.innerHTML = accounts.map(a => {
             const isAct = a.ig_username === activeIg;
             const isBridged = a.attached_to_bridge;
-            const stColor = a.ig_logged_in ? 'text-ok' : 'text-warn';
-            const rightTag = isBridged ? 'Bridged' : (a.ig_logged_in ? 'Online' : 'Offline');
+            const stText = a.ig_logged_in ? `Online (${a.login_method})` : 'Offline';
             return `
-              <button class="nav-item ${isAct ? 'active' : ''}" onclick="selectIgAccount('${a.ig_username}')">
-                <span class="mono">@${a.ig_username}</span>
-                <span class="${isBridged ? 'text-ok' : stColor}" style="font-size: 11px;">${rightTag}</span>
-              </button>
+              <div class="account-row ${isAct ? 'active' : ''}" onclick="selectIgAccount('${a.ig_username}')">
+                <div>
+                  <div class="mono" style="font-weight: 700; font-size: 13px;">@${escapeHtml(a.ig_username)}</div>
+                  <div style="font-size: 11px; color: var(--text-secondary);">
+                    <span class="${a.ig_logged_in ? 'text-ok' : 'text-warn'}">${stText}</span>
+                    · ${a.linked_topics} topics · ${a.forwarded} DMs
+                  </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                  ${isBridged
+                    ? `<span class="text-ok mono" style="font-size: 11px; font-weight: 700;">Bridged ✓</span>`
+                    : `<button onclick="event.stopPropagation(); attachSpecificAccount('${a.ig_username}')" style="padding: 4px 9px; font-size: 11px;">Attach</button>`
+                  }
+                </div>
+              </div>
             `;
           }).join('');
         }
 
-        // Telegram section status
         const tgLabel = document.getElementById('tg-conn-label');
         if (st.tg_running) {
           tgLabel.textContent = `Connected${st.tg_bot_username ? ' (@' + st.tg_bot_username + ')' : ''}`;
           tgLabel.className = 'text-ok';
-        } else if (st.tg_chat_id) {
-          tgLabel.textContent = st.tg_error || `Group ${st.tg_chat_id} configured`;
+        } else if (st.tg_error) {
+          tgLabel.textContent = st.tg_error;
           tgLabel.className = 'text-warn';
         } else {
-          tgLabel.textContent = st.tg_bot_username ? `Bot @${st.tg_bot_username} online · Set Group ID` : 'Set Group Chat ID';
+          tgLabel.textContent = 'Set Group ID & Bot Token';
           tgLabel.className = 'text-warn';
         }
 
@@ -938,34 +1312,27 @@
         }
 
         if (slot) {
-          document.getElementById('header-ig-handle').textContent = '@' + slot.ig_username;
-          const stEl = document.getElementById('header-ig-status');
-          stEl.textContent = slot.ig_logged_in
-            ? `Logged In (${slot.login_method})`
-            : (slot.login_in_progress ? 'Logging In...' : 'Logged Out');
-          stEl.className = slot.ig_logged_in ? 'text-ok' : 'text-warn';
+          document.getElementById('hero-headline').textContent = `@${slot.ig_username} — Bridge Overview`;
+          document.getElementById('kpi-ig-status').textContent = slot.ig_logged_in ? 'Logged In' : (slot.login_in_progress ? 'Logging In' : 'Logged Out');
+          document.getElementById('kpi-ig-status').className = 'kpi-value tabular ' + (slot.ig_logged_in ? 'text-ok' : 'text-warn');
+          document.getElementById('kpi-ig-method').textContent = slot.login_method || 'none';
+          document.getElementById('kpi-ig-handle').textContent = '@' + slot.ig_username;
 
-          const bridgeStateEl = document.getElementById('header-bridge-state');
+          document.getElementById('kpi-bridge-state').textContent = slot.attached_to_bridge ? 'Attached' : 'Standby';
+          document.getElementById('kpi-bridge-state').className = 'kpi-value tabular ' + (slot.attached_to_bridge ? 'text-ok' : '');
+          document.getElementById('kpi-bridge-bot').textContent = st.tg_bot_username ? ('@' + st.tg_bot_username) : (st.tg_running ? 'Active' : 'Check Token');
+          document.getElementById('kpi-bridge-group').textContent = st.tg_chat_id ? `Group: ${st.tg_chat_id}` : 'Group: unset';
+
           const attachBtn = document.getElementById('btn-attach-bridge');
           if (slot.attached_to_bridge) {
-            bridgeStateEl.textContent = 'Attached to Telegram Bridge';
-            bridgeStateEl.className = 'text-ok';
             attachBtn.textContent = 'Attached to Bridge ✓';
             attachBtn.className = 'success-btn';
             attachBtn.disabled = true;
           } else {
-            bridgeStateEl.textContent = 'Standby (Click Attach to route DMs to Telegram)';
-            bridgeStateEl.className = '';
-            attachBtn.textContent = 'Attach to Telegram Bridge';
+            attachBtn.textContent = 'Attach to Bridge';
             attachBtn.className = 'primary';
             attachBtn.disabled = false;
           }
-
-          document.getElementById('header-ig-metrics').textContent =
-            `${slot.linked_topics} bridged forum topics · ${slot.forwarded} DMs forwarded · Proxy: ${slot.proxy ? 'configured' : 'direct'}`;
-
-          document.getElementById('pw-saved-badge').textContent = slot.has_password ? '(Saved)' : '';
-          document.getElementById('totp-saved-badge').textContent = slot.has_totp ? '(Saved)' : '';
 
           const swRt = document.getElementById('sw-realtime');
           const swFb = document.getElementById('sw-fbns');
@@ -974,22 +1341,25 @@
           swRt.checked = Boolean(slot.realtime);
           swFb.checked = Boolean(slot.fbns);
 
-          document.getElementById('rt-header-summary').textContent =
-            `MQTT: ${slot.realtime ? (slot.rt_connected ? 'connected' : 'on') : 'off'} · FBNS: ${slot.fbns ? (slot.fbns_connected ? 'connected' : 'on') : 'off'}`;
+          document.getElementById('kpi-rt-state').textContent = slot.realtime ? (slot.rt_connected ? 'Connected' : 'Enabled') : 'OFF';
+          document.getElementById('kpi-rt-events').textContent = `${slot.rt_events} events`;
+          document.getElementById('kpi-rt-foot').textContent = slot.rt_error ? slot.rt_error.slice(0, 42) : 'edge-mqtt.facebook.com';
 
-          document.getElementById('rt-desc').textContent = slot.realtime
-            ? (slot.rt_connected ? `Connected (${slot.rt_events} events)` : (slot.rt_error || 'Enabled · standby'))
-            : 'Disabled (polling mode)';
-          document.getElementById('fbns-desc').textContent = slot.fbns
-            ? (slot.fbns_connected ? `Connected (${slot.fbns_pushes} pushes)` : (slot.fbns_error || 'Enabled · standby'))
-            : 'Disabled';
+          document.getElementById('kpi-fbns-state').textContent = slot.fbns ? (slot.fbns_connected ? 'Connected' : 'Enabled') : 'OFF';
+          document.getElementById('kpi-fbns-pushes').textContent = `${slot.fbns_pushes} pushes`;
+          document.getElementById('kpi-fbns-foot').textContent = slot.fbns_error ? slot.fbns_error.slice(0, 42) : 'mqtt-mini.facebook.com';
 
+          document.getElementById('kpi-topics-count').textContent = String(slot.linked_topics);
+          document.getElementById('kpi-forwarded-count').textContent = String(slot.forwarded);
+          document.getElementById('kpi-proxy-state').textContent = slot.proxy ? 'Proxy Active' : 'Direct';
+
+          document.getElementById('pw-saved-badge').textContent = slot.has_password ? '(Saved)' : '';
+          document.getElementById('totp-saved-badge').textContent = slot.has_totp ? '(Saved)' : '';
           document.getElementById('device-info-pre').textContent = slot.session_info;
 
           const canDl = slot.ig_logged_in || slot.has_saved_session;
-          document.getElementById('btn-top-download').disabled = !canDl;
-          document.getElementById('btn-bar-download').disabled = !canDl;
-          document.getElementById('btn-bar-relogin').disabled = !canDl;
+          document.getElementById('btn-hero-download').disabled = !canDl;
+          document.getElementById('btn-hero-relogin').disabled = !canDl;
           document.getElementById('btn-reset-device').disabled = false;
           document.getElementById('btn-logout-slot').disabled = !slot.ig_logged_in;
           document.getElementById('btn-remove-slot').disabled = false;
@@ -1000,27 +1370,24 @@
             tBox.innerHTML = '<div style="color: var(--text-muted);">No forum topics created yet for this account.</div>';
           } else {
             tBox.innerHTML = slot.topics.map(t => `
-              <div style="display: flex; align-items: center; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border);">
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
                 <span class="mono">${escapeHtml(t.title)} <span style="color: var(--text-muted);">→ Topic #${t.topic_id}</span></span>
-                <button onclick="unlinkTopic('${t.thread_id}')" style="padding: 2px 8px; font-size: 11px;">Unlink</button>
+                <button onclick="unlinkTopic('${t.thread_id}')" style="padding: 3px 9px; font-size: 11px;">Unlink</button>
               </div>
             `).join('');
           }
         } else {
-          document.getElementById('header-ig-handle').textContent = 'New Instagram Account';
-          const stEl = document.getElementById('header-ig-status');
-          stEl.textContent = 'Ready to Add';
-          stEl.className = 'text-warn';
-          document.getElementById('header-bridge-state').textContent = 'Will attach on login';
-          document.getElementById('header-ig-metrics').textContent = 'Enter Instagram credentials below to add this account to your database.';
+          document.getElementById('hero-headline').textContent = `Here's Your Bridge Overview`;
+          document.getElementById('kpi-ig-status').textContent = 'New Slot';
+          document.getElementById('kpi-ig-status').className = 'kpi-value tabular text-warn';
+          document.getElementById('kpi-ig-method').textContent = 'ready';
+          document.getElementById('kpi-ig-handle').textContent = 'Add IG below';
+          document.getElementById('kpi-bridge-state').textContent = 'Standby';
           document.getElementById('btn-attach-bridge').disabled = true;
-          document.getElementById('btn-bar-relogin').disabled = true;
-          document.getElementById('btn-bar-download').disabled = true;
-          document.getElementById('btn-top-download').disabled = true;
+          document.getElementById('btn-hero-relogin').disabled = true;
+          document.getElementById('btn-hero-download').disabled = true;
           document.getElementById('sw-realtime').disabled = true;
           document.getElementById('sw-fbns').disabled = true;
-          document.getElementById('sw-realtime').checked = true;
-          document.getElementById('sw-fbns').checked = true;
           document.getElementById('device-info-pre').textContent = 'No session loaded yet.';
           document.getElementById('btn-reset-device').disabled = true;
           document.getElementById('btn-logout-slot').disabled = true;
@@ -1037,9 +1404,15 @@
 
     async function attachCurrentToBridge() {
       if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      await attachSpecificAccount(activeIg);
+    }
+
+    async function attachSpecificAccount(igName) {
+      if (!currentUser || !igName) return;
+      activeIg = igName;
       await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/attach`, {
         method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg })
+        body: JSON.stringify({ ig_username: igName })
       });
       await refreshState();
     }
@@ -1074,7 +1447,7 @@
         hydratedKey = `${currentUser}:${activeIg}`;
         fb.textContent = res.message;
         fb.className = res.ok ? 'text-ok' : 'text-err';
-        await loadUsers();
+        await refreshState();
       } catch (e) {
         fb.textContent = e.message;
         fb.className = 'text-err';
@@ -1107,7 +1480,7 @@
         fb.textContent = res.message;
         fb.className = res.ok ? 'text-ok' : 'text-err';
         if (res.ok) document.getElementById('ig-cookie').value = '';
-        await loadUsers();
+        await refreshState();
       } catch (e) {
         fb.textContent = e.message;
         fb.className = 'text-err';
@@ -1145,7 +1518,7 @@
         hydratedKey = `${currentUser}:${activeIg}`;
         fb.textContent = res.message;
         fb.className = res.ok ? 'text-ok' : 'text-err';
-        await loadUsers();
+        await refreshState();
       } catch (e) {
         fb.textContent = e.message;
         fb.className = 'text-err';
@@ -1206,13 +1579,13 @@
       });
       activeIg = '';
       hydratedKey = '';
-      await loadUsers();
+      await refreshState();
     }
 
     function downloadActiveSession() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
+      if (!currentUser || !activeIg || activeIg === '__NEW__' || !authToken) return;
       const a = document.createElement('a');
-      a.href = `/api/users/${encodeURIComponent(currentUser)}/accounts/${encodeURIComponent(activeIg)}/session`;
+      a.href = `/api/users/${encodeURIComponent(currentUser)}/accounts/${encodeURIComponent(activeIg)}/session?token=${encodeURIComponent(authToken)}`;
       a.download = `${activeIg}_session.json`;
       document.body.appendChild(a);
       a.click();
@@ -1278,7 +1651,7 @@
     }
 
     async function fetchLogs() {
-      if (!currentUser) return;
+      if (!currentUser || !authToken) return;
       try {
         const res = await api(`/api/users/${encodeURIComponent(currentUser)}/logs?since=${lastLogId}`);
         const inc = res.logs || [];
@@ -1332,19 +1705,19 @@
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
-    document.getElementById('sidebar-user-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') openUserFromSidebar();
+    document.getElementById('gate-username').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('gate-password').focus();
     });
-    document.getElementById('welcome-user-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') openUserFromWelcome();
+    document.getElementById('gate-password').addEventListener('keydown', e => {
+      if (e.key === 'Enter') submitWorkspaceAuth();
     });
     document.getElementById('cmd-input').addEventListener('keydown', e => {
       if (e.key === 'Enter') runBotCommand();
     });
 
-    loadUsers();
+    syncAuthUI();
     setInterval(() => {
-      if (currentUser) refreshState();
+      if (currentUser && authToken) refreshState();
     }, 3000);
   </script>
 </body>

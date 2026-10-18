@@ -274,7 +274,7 @@ class _TokenHub:
 
         rows.append(
             [
-                InlineKeyboardButton("🔀 Switch Workspace DB", callback_data="auth:switch"),
+                InlineKeyboardButton("🔀 Switch / Sign Out", callback_data="auth:switch"),
                 InlineKeyboardButton("🔄 Refresh Panel", callback_data="panel:refresh"),
             ]
         )
@@ -294,6 +294,10 @@ class _TokenHub:
 
         if data in ("auth:register", "auth:login", "auth:switch"):
             if data == "auth:switch":
+                prev_ws = self._find_workspace_for_user(user_id)
+                if prev_ws:
+                    await prev_ws.update_telegram({"tg_admin_id": "0"})
+                self._chat_state.pop(user_id, None)
                 text, markup = self._welcome_View()
                 await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
                 return
@@ -301,9 +305,9 @@ class _TokenHub:
             self._chat_state[user_id] = {"step": "await_workspace_username", "mode": mode}
             prompt = (
                 "🆕 <b>Register New Workspace</b>\n\n"
-                "Reply with a new <b>username</b> for your personal database:"
+                "Step 1/2: Reply with a new <b>username</b> for your workspace:"
                 if mode == "register"
-                else "🔑 <b>Login to Existing Workspace</b>\n\nReply with your <b>workspace username</b>:"
+                else "🔑 <b>Sign In to Existing Workspace</b>\n\nStep 1/2: Reply with your <b>workspace username</b>:"
             )
             await query.message.reply_text(prompt, parse_mode="HTML")
             return
@@ -460,7 +464,7 @@ class _TokenHub:
             else:
                 await message.reply_text(
                     f"ℹ️ Group Chat ID is <code>{chat.id}</code>.\n"
-                    f"Open @{self.bot_username} in private chat and send /start first to register your workspace.",
+                    f"Open @{self.bot_username} in private chat and send /start first to sign in to your workspace.",
                     parse_mode="HTML",
                 )
             return
@@ -487,50 +491,54 @@ class _TokenHub:
         finally:
             current_user_var.reset(tok)
 
-    async def _bind_or_authenticate_workspace(self, message, user_id: int, uname: str, mode: str) -> bool:
+    async def _complete_workspace_auth(self, message, user_id: int, uname: str, password: str, mode: str) -> bool:
         mgr = self._manager
-        existing_ws = mgr.workspaces.get(uname)
         if mode == "register":
-            if existing_ws is not None:
+            if mgr.workspace_exists(uname):
+                self._chat_state.pop(user_id, None)
                 await message.reply_text(
                     f"❌ Workspace <b>{uname}</b> is already registered.\n"
-                    f"Please reply with a different username, or click <b>🔑 Login Existing Workspace</b> if it is yours.",
+                    f"Click <b>🔑 Login Existing Workspace</b> and enter your password to sign in.",
                     parse_mode="HTML",
                 )
                 return False
-            # Unbind previous workspace from this user_id if switching
             prev_ws = self._find_workspace_for_user(user_id)
             if prev_ws and prev_ws.username != uname:
                 await prev_ws.update_telegram({"tg_admin_id": "0"})
-            ws = await mgr.get_or_create(uname)
+            ws = await mgr.register_workspace(uname, password)
             await ws.update_telegram({"tg_admin_id": str(user_id)})
             self._chat_state.pop(user_id, None)
-            await message.reply_text(f"✅ Registered and connected to workspace <b>{ws.username}</b>!", parse_mode="HTML")
+            try:
+                await message.delete()
+            except TelegramError:
+                pass
+            await message.chat.send_message(
+                f"✅ Registered and authenticated workspace <b>{ws.username}</b>!",
+                parse_mode="HTML",
+            )
             view_text, markup = self._control_panel_view(ws)
-            await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
+            await message.chat.send_message(view_text, parse_mode="HTML", reply_markup=markup)
             return True
         else:
-            if existing_ws is None:
-                await message.reply_text(
-                    f"❌ Workspace <b>{uname}</b> was not found.\n"
-                    f"Check the spelling or click <b>🆕 Register New Workspace</b> to create it.",
-                    parse_mode="HTML",
-                )
-                return False
-            if existing_ws.tg_admin_id and existing_ws.tg_admin_id != user_id:
-                await message.reply_text(
-                    "🔒 <b>Access Denied</b>: That workspace is already bound to another Telegram account.",
-                    parse_mode="HTML",
-                )
+            ws, err = await mgr.authenticate_workspace(uname, password)
+            if not ws:
+                await message.reply_text(f"🔒 <b>Authentication Failed:</b> {err}", parse_mode="HTML")
                 return False
             prev_ws = self._find_workspace_for_user(user_id)
             if prev_ws and prev_ws.username != uname:
                 await prev_ws.update_telegram({"tg_admin_id": "0"})
-            await existing_ws.update_telegram({"tg_admin_id": str(user_id)})
+            await ws.update_telegram({"tg_admin_id": str(user_id)})
             self._chat_state.pop(user_id, None)
-            await message.reply_text(f"✅ Logged in to workspace <b>{existing_ws.username}</b>!", parse_mode="HTML")
-            view_text, markup = self._control_panel_view(existing_ws)
-            await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
+            try:
+                await message.delete()
+            except TelegramError:
+                pass
+            await message.chat.send_message(
+                f"✅ Signed in to workspace <b>{ws.username}</b>!",
+                parse_mode="HTML",
+            )
+            view_text, markup = self._control_panel_view(ws)
+            await message.chat.send_message(view_text, parse_mode="HTML", reply_markup=markup)
             return True
 
     async def _handle_private_message(self, update: Update, user_id: int, text: str) -> None:
@@ -542,14 +550,24 @@ class _TokenHub:
         ws = self._find_workspace_for_user(user_id)
         state = self._chat_state.get(user_id)
 
-        # Quick /login <username> or /register <username>
+        # Quick /login <username> <password> or /register <username> <password>
         if text.startswith(("/login ", "/register ")):
-            cmd, raw_arg = text.split(None, 1)
-            uname = sanitize_username(raw_arg)
-            if uname:
-                mode = "register" if cmd.startswith("/register") else "login"
-                await self._bind_or_authenticate_workspace(message, user_id, uname, mode)
-                return
+            parts = text.split(None, 2)
+            mode = "register" if parts[0].startswith("/register") else "login"
+            if len(parts) == 3:
+                uname = sanitize_username(parts[1])
+                if uname:
+                    await self._complete_workspace_auth(message, user_id, uname, parts[2].strip(), mode)
+                    return
+            elif len(parts) == 2:
+                uname = sanitize_username(parts[1])
+                if uname:
+                    self._chat_state[user_id] = {"step": "await_workspace_password", "mode": mode, "username": uname}
+                    await message.reply_text(
+                        f"🔐 Step 2/2: Reply with the <b>password</b> for workspace <code>{uname}</code>:",
+                        parse_mode="HTML",
+                    )
+                    return
 
         # Step 1: Awaiting workspace username during Registration / Login
         if state and state.get("step") == "await_workspace_username" and not text.startswith("/"):
@@ -557,7 +575,43 @@ class _TokenHub:
             if not uname:
                 await message.reply_text("⚠️ Please send a valid username (letters, numbers, dots, underscores).")
                 return
-            await self._bind_or_authenticate_workspace(message, user_id, uname, state.get("mode", "login"))
+            mode = state.get("mode", "login")
+            if mode == "register" and mgr.workspace_exists(uname):
+                await message.reply_text(
+                    f"❌ Workspace <b>{uname}</b> is already registered.\n"
+                    f"Reply with a different username, or click <b>🔑 Login Existing Workspace</b>.",
+                    parse_mode="HTML",
+                )
+                return
+            if mode == "login" and not mgr.workspace_exists(uname):
+                await message.reply_text(
+                    f"❌ Workspace <b>{uname}</b> does not exist.\n"
+                    f"Check the spelling or click <b>🆕 Register New Workspace</b> to create it.",
+                    parse_mode="HTML",
+                )
+                return
+            self._chat_state[user_id] = {"step": "await_workspace_password", "mode": mode, "username": uname}
+            await message.reply_text(
+                f"🔐 Step 2/2: Create a <b>password</b> for new workspace <code>{uname}</code> (min 4 characters):"
+                if mode == "register"
+                else f"🔐 Step 2/2: Enter your <b>password</b> for workspace <code>{uname}</code>:",
+                parse_mode="HTML",
+            )
+            return
+
+        # Step 2: Awaiting workspace password during Registration / Login
+        if state and state.get("step") == "await_workspace_password" and not text.startswith("/"):
+            pw = text.strip()
+            if len(pw) < 4:
+                await message.reply_text("⚠️ Password must be at least 4 characters. Please reply with your password:")
+                return
+            await self._complete_workspace_auth(
+                message,
+                user_id,
+                state.get("username", ""),
+                pw,
+                state.get("mode", "login"),
+            )
             return
 
         # If not registered/logged into a workspace yet, prompt to register or login

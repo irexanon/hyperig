@@ -347,13 +347,22 @@ class InstagramSlot:
         }
 
 
+import hashlib
+import secrets
+
+
+def _hash_workspace_password(raw_pw: str) -> str:
+    return hashlib.sha256(f"hib_ws_v1:{raw_pw}".encode("utf-8")).hexdigest()
+
+
 class UserWorkspace:
-    """A User profile (identified by username, no password required) with its own DB and multiple Instagram accounts."""
+    """An authenticated User Workspace with its own isolated database and multiple Instagram accounts."""
 
     def __init__(self, username: str, base_cfg: Config, store: Store):
         self.username = username
         self.base_cfg = base_cfg
         self.store = store
+        self.password_hash: str = ""
         self.tg_chat_id: int = 0
         self.tg_admin_id: int = 0
         self.tg_token: str = ""
@@ -372,12 +381,50 @@ class UserWorkspace:
             return self.slots[self.active_ig]
         return next(iter(self.slots.values()), None)
 
+    async def set_password(self, raw_password: str) -> None:
+        self.password_hash = _hash_workspace_password(raw_password.strip())
+        await self._save_profile()
+
+    async def verify_password(self, raw_password: str) -> bool:
+        clean = (raw_password or "").strip()
+        if not clean:
+            return False
+        candidate_hash = _hash_workspace_password(clean)
+        if self.password_hash:
+            if secrets.compare_digest(self.password_hash, candidate_hash):
+                return True
+            # Also allow authenticating with any saved Instagram account password in this workspace
+            for slot in self.slots.values():
+                if slot.cfg.ig_password and secrets.compare_digest(slot.cfg.ig_password, clean):
+                    return True
+            return False
+
+        # Legacy workspace created before workspace passwords existed:
+        # Check if password matches any saved ig_password in legacy/slot configs, or bind on first login
+        legacy_cfg = await self.store.get("user_config") or {}
+        known_pws = set()
+        if isinstance(legacy_cfg, dict) and legacy_cfg.get("ig_password"):
+            known_pws.add(str(legacy_cfg["ig_password"]).strip())
+        for slot in self.slots.values():
+            if slot.cfg.ig_password:
+                known_pws.add(slot.cfg.ig_password.strip())
+        if known_pws:
+            if clean in known_pws:
+                await self.set_password(clean)
+                return True
+            return False
+        # No password was ever set on this legacy workspace: bind the provided password now
+        if len(clean) >= 4:
+            await self.set_password(clean)
+            return True
+        return False
+
     async def start(self) -> None:
         tok = current_user_var.set(self.username)
         try:
             profile = await self.store.get("profile")
+            legacy_cfg = await self.store.get("user_config")
             if not isinstance(profile, dict):
-                legacy_cfg = await self.store.get("user_config")
                 legacy_session = await self.store.get("session")
                 accounts: list[str] = []
                 tg_chat_id = 0
@@ -416,6 +463,7 @@ class UserWorkspace:
                 }
                 await self.store.set("profile", profile)
 
+            self.password_hash = str(profile.get("password_hash") or "")
             try:
                 self.tg_chat_id = int(profile.get("tg_chat_id") or 0)
             except ValueError:
@@ -425,6 +473,19 @@ class UserWorkspace:
             except ValueError:
                 self.tg_admin_id = 0
             self.tg_token = str(profile.get("tg_token") or "")
+
+            # Recover tg_admin_id or tg_chat_id from legacy_cfg if missing in profile
+            if isinstance(legacy_cfg, dict):
+                if not self.tg_admin_id and legacy_cfg.get("tg_admin_id"):
+                    try:
+                        self.tg_admin_id = int(legacy_cfg["tg_admin_id"])
+                    except ValueError:
+                        pass
+                if not self.tg_chat_id and legacy_cfg.get("tg_chat_id"):
+                    try:
+                        self.tg_chat_id = int(legacy_cfg["tg_chat_id"])
+                    except ValueError:
+                        pass
 
             account_names = [sanitize_username(a) for a in (profile.get("accounts") or []) if sanitize_username(a)]
             self.active_ig = sanitize_username(profile.get("active_account") or "")
@@ -447,6 +508,7 @@ class UserWorkspace:
         await self.store.set(
             "profile",
             {
+                "password_hash": self.password_hash,
                 "tg_chat_id": self.tg_chat_id,
                 "tg_admin_id": self.tg_admin_id,
                 "tg_token": self.tg_token,
@@ -461,6 +523,11 @@ class UserWorkspace:
             return self.slots[ig_username]
         scoped = ScopedStore(self.store, f"acct_{ig_username}_")
         saved_cfg = await scoped.get("user_config", {}) or {}
+        if not self.tg_admin_id and saved_cfg.get("tg_admin_id"):
+            try:
+                self.tg_admin_id = int(saved_cfg["tg_admin_id"])
+            except ValueError:
+                pass
         if self.tg_chat_id:
             saved_cfg["tg_chat_id"] = self.tg_chat_id
         if self.tg_admin_id:
@@ -606,15 +673,15 @@ class UserWorkspace:
 
 
 class MultiUserManager:
-    """Manages per-username workspaces and databases."""
+    """Manages per-username workspaces, authentication, and databases."""
 
     def __init__(self, base_cfg: Config):
         self.base_cfg = base_cfg
         self.workspaces: dict[str, UserWorkspace] = {}
+        self.tokens: dict[str, str] = {}  # auth_token -> username
         self._lock = asyncio.Lock()
 
     async def bootstrap_existing(self) -> None:
-        # Ensure the shared Telegram Bot starts immediately so users can send /start in private DM
         if self.base_cfg.tg_token:
             try:
                 await _TokenHub.ensure_Started(self.base_cfg.tg_token)
@@ -627,6 +694,62 @@ class MultiUserManager:
                 await self.get_or_create(name)
             except Exception as e:
                 log.warning("Could not restore workspace %s: %s", name, e)
+
+    def workspace_exists(self, raw_username: str) -> bool:
+        uname = sanitize_username(raw_username)
+        if not uname:
+            return False
+        if uname in self.workspaces:
+            return True
+        return uname in list_registered_users(self.base_cfg)
+
+    async def register_workspace(self, raw_username: str, raw_password: str) -> UserWorkspace:
+        uname = sanitize_username(raw_username)
+        if not uname:
+            raise ValueError("Please enter a valid username.")
+        clean_pw = (raw_password or "").strip()
+        if len(clean_pw) < 4:
+            raise ValueError("Password must be at least 4 characters.")
+        if self.workspace_exists(uname):
+            raise ValueError(f"Workspace '{uname}' is already registered. Please Sign In instead.")
+        ws = await self.get_or_create(uname)
+        await ws.set_password(clean_pw)
+        add_user_log(ws.username, "INFO", "auth", f"Workspace '{ws.username}' registered.")
+        return ws
+
+    async def authenticate_workspace(self, raw_username: str, raw_password: str) -> tuple[UserWorkspace | None, str]:
+        uname = sanitize_username(raw_username)
+        if not uname:
+            return None, "Please enter your workspace username."
+        clean_pw = (raw_password or "").strip()
+        if not clean_pw:
+            return None, "Please enter your workspace password."
+        if not self.workspace_exists(uname):
+            return None, f"Workspace '{uname}' does not exist. Switch to Register to create it."
+        ws = await self.get_or_create(uname)
+        ok = await ws.verify_password(clean_pw)
+        if not ok:
+            return None, "Incorrect password for this workspace."
+        return ws, ""
+
+    def issue_token(self, ws: UserWorkspace) -> str:
+        tok = hashlib.sha256(f"hib_tok_v1:{ws.username}:{ws.password_hash}".encode("utf-8")).hexdigest()
+        self.tokens[tok] = ws.username
+        return tok
+
+    def verify_token(self, token: str, username: str) -> bool:
+        if not token:
+            return False
+        uname = sanitize_username(username)
+        if self.tokens.get(token) == uname:
+            return True
+        ws = self.workspaces.get(uname)
+        if ws and ws.password_hash:
+            expected = hashlib.sha256(f"hib_tok_v1:{ws.username}:{ws.password_hash}".encode("utf-8")).hexdigest()
+            if secrets.compare_digest(token, expected):
+                self.tokens[token] = uname
+                return True
+        return False
 
     async def get_or_create(self, raw_username: str) -> UserWorkspace:
         uname = sanitize_username(raw_username)
@@ -665,7 +788,13 @@ class MultiUserManager:
 
 
 def _send_json(writer: asyncio.StreamWriter, status_code: int, payload: dict) -> None:
-    status_map = {200: "200 OK", 400: "400 Bad Request", 404: "404 Not Found", 500: "500 Internal Server Error"}
+    status_map = {
+        200: "200 OK",
+        400: "400 Bad Request",
+        401: "401 Unauthorized",
+        404: "404 Not Found",
+        500: "500 Internal Server Error",
+    }
     body = json.dumps(payload, default=str).encode("utf-8")
     headers = (
         f"HTTP/1.1 {status_map.get(status_code, '200 OK')}\r\n"
@@ -694,16 +823,20 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
             query = parse_qs(parsed.query)
 
             content_length = 0
+            auth_header_token = ""
             while True:
                 line = await asyncio.wait_for(reader.readline(), timeout=10.0)
                 if not line or line in (b"\r\n", b"\n"):
                     break
                 header = line.decode("utf-8", errors="replace").strip()
-                if header.lower().startswith("content-length:"):
+                lower_h = header.lower()
+                if lower_h.startswith("content-length:"):
                     try:
                         content_length = int(header.split(":", 1)[1].strip())
                     except ValueError:
                         content_length = 0
+                elif lower_h.startswith("x-auth-token:"):
+                    auth_header_token = header.split(":", 1)[1].strip()
 
             body = b""
             if content_length > 0:
@@ -718,20 +851,55 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
                     return {}
 
             if path == "/api/users" and method == "GET":
-                # Privacy: never expose other users' workspaces globally
                 _send_json(writer, 200, {"users": []})
                 await writer.drain()
                 return
 
-            if path == "/api/users" and method == "POST":
+            if path == "/api/auth/register" and method == "POST":
                 data = parse_json_body()
                 raw_uname = sanitize_username(str(data.get("username") or ""))
+                raw_pw = str(data.get("password") or "").strip()
                 if not raw_uname:
-                    _send_json(writer, 400, {"error": "Please enter a valid username."})
+                    _send_json(writer, 400, {"error": "Please enter a valid workspace username."})
                     await writer.drain()
                     return
-                ws = await manager.get_or_create(raw_uname)
-                _send_json(writer, 200, {"username": ws.username, "state": await ws.to_state_dict()})
+                if len(raw_pw) < 4:
+                    _send_json(writer, 400, {"error": "Password must be at least 4 characters."})
+                    await writer.drain()
+                    return
+                if manager.workspace_exists(raw_uname):
+                    _send_json(
+                        writer,
+                        400,
+                        {"error": f"Workspace '{raw_uname}' is already registered. Switch to Sign In and enter your password."},
+                    )
+                    await writer.drain()
+                    return
+                ws = await manager.register_workspace(raw_uname, raw_pw)
+                token = manager.issue_token(ws)
+                _send_json(
+                    writer,
+                    200,
+                    {"ok": True, "username": ws.username, "token": token, "state": await ws.to_state_dict()},
+                )
+                await writer.drain()
+                return
+
+            if path == "/api/auth/login" and method == "POST":
+                data = parse_json_body()
+                raw_uname = sanitize_username(str(data.get("username") or ""))
+                raw_pw = str(data.get("password") or "").strip()
+                ws, err = await manager.authenticate_workspace(raw_uname, raw_pw)
+                if not ws:
+                    _send_json(writer, 401, {"error": err})
+                    await writer.drain()
+                    return
+                token = manager.issue_token(ws)
+                _send_json(
+                    writer,
+                    200,
+                    {"ok": True, "username": ws.username, "token": token, "state": await ws.to_state_dict()},
+                )
                 await writer.drain()
                 return
 
@@ -740,6 +908,15 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
                 if len(segments) >= 3:
                     uname = sanitize_username(segments[2])
                     subpath = "/".join(segments[3:])
+                    req_tok = auth_header_token or ((query.get("token") or [""])[0])
+                    if not manager.verify_token(req_tok, uname):
+                        _send_json(writer, 401, {"error": "Session expired or unauthorized. Please Sign In."})
+                        await writer.drain()
+                        return
+                    if not manager.workspace_exists(uname):
+                        _send_json(writer, 404, {"error": "Workspace not found."})
+                        await writer.drain()
+                        return
                     ws = await manager.get_or_create(uname)
 
                     if subpath == "state" and method == "GET":

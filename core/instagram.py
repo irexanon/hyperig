@@ -353,8 +353,11 @@ class InstagramClient:
                     continue
                 try:
                     await self._on_message(m)
-                except Exception:
-                    log.exception("Delivery failed for message %s, will retry on the next sync", m.id)
+                except Exception as e:
+                    if "Telegram bridge is not attached or connected" in str(e):
+                        log.debug("Skipping delivery for message %s until Telegram bridge is connected", m.id)
+                    else:
+                        log.exception("Delivery failed for message %s, will retry on the next sync", m.id)
                     if changed:
                         await self._save_cursors()
                     return False
