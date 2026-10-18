@@ -1,0 +1,4 @@
+instagrapi>=3.0.26
+python-telegram-bot
+pymongo
+python-dotenv

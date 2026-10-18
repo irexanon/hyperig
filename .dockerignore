@@ -1,0 +1,9 @@
+.env
+data/
+*.session
+session.json
+cookies.json
+__pycache__/
+.venv/
+venv/
+.git
