@@ -58,7 +58,7 @@ class _TokenHub:
 
     def __init__(self, token: str):
         self.token = token
-        self.app = Application.builder().token(token).build()
+        self.app = Application.builder().token(token).concurrent_updates(True).build()
         self.bot = self.app.bot
         self.running = False
         self.error = ""
@@ -67,6 +67,8 @@ class _TokenHub:
         self._commands_published = False
         # Per-Telegram-user conversational state: tg_user_id -> {"step": str, ...}
         self._chat_state: dict[int, dict] = {}
+        # Active single panel message ID per Telegram user so menus edit in-place
+        self._panel_msg_id: dict[int, int] = {}
 
     @classmethod
     def set_manager(cls, manager) -> None:
@@ -111,16 +113,13 @@ class _TokenHub:
         if not self._commands_published:
             try:
                 base_cmds = [
-                    BotCommand("start", "Open Bot Control Panel or Register/Login"),
-                    BotCommand("panel", "Manage Instagram accounts & Bridge settings"),
-                    BotCommand("status", "Show bridge, Realtime MQTT & FBNS status"),
-                    BotCommand("session", "Show active Instagram device & session info"),
-                    BotCommand("relogin", "Refresh Instagram login keeping device UUID"),
-                    BotCommand("cookie", "Log in with browser sessionid cookie"),
-                    BotCommand("code", "Submit 2FA or challenge verification code"),
-                    BotCommand("logout", "Log out active Instagram account"),
-                    BotCommand("link", "Link current Forum Group as bridge destination"),
-                    BotCommand("help", "Show all available commands"),
+                    BotCommand("start", "Open main menu"),
+                    BotCommand("accounts", "View & switch Instagram accounts"),
+                    BotCommand("status", "Show connection status"),
+                    BotCommand("dump", "Open a public profile with action buttons"),
+                    BotCommand("profile", "Public profile info"),
+                    BotCommand("link", "Link Telegram Forum Group"),
+                    BotCommand("logout", "Sign out of workspace"),
                 ]
                 await self.bot.set_my_commands(base_cmds)
                 self._commands_published = True
@@ -154,7 +153,6 @@ class _TokenHub:
         return None
 
     def _match_group_bridge(self, chat_id: int, topic_id: int | None, tg_user_id: int | None) -> "TelegramBridge | None":
-        # Match only bridges that are actively attached for this chat_id
         matching = [
             b for b in self.bridges
             if b.chat_id and b.chat_id == chat_id and b.attached
@@ -177,233 +175,439 @@ class _TokenHub:
             return None
         return b
 
-    # ------------------------------------------------- Private Bot UI Builders
-    def _welcome_View(self) -> tuple[str, InlineKeyboardMarkup]:
+    # ------------------------------------------------- In-Place Message Renderer
+    async def _show_panel(
+        self,
+        chat_id: int,
+        user_id: int,
+        text: str,
+        markup: InlineKeyboardMarkup | None = None,
+        edit_msg=None,
+        force_new: bool = False,
+    ) -> None:
+        """Updates the user's single active bot message in-place, or sends a new one if needed."""
+        if edit_msg is not None and not force_new:
+            try:
+                await edit_msg.edit_text(text, parse_mode="HTML", reply_markup=markup)
+                self._panel_msg_id[user_id] = edit_msg.message_id
+                return
+            except BadRequest as e:
+                if "message is not modified" in str(e).lower():
+                    self._panel_msg_id[user_id] = edit_msg.message_id
+                    return
+            except TelegramError:
+                pass
+
+        msg_id = self._panel_msg_id.get(user_id)
+        if msg_id and not force_new:
+            try:
+                await self.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=text,
+                    parse_mode="HTML",
+                    reply_markup=markup,
+                )
+                return
+            except BadRequest as e:
+                if "message is not modified" in str(e).lower():
+                    return
+            except TelegramError:
+                pass
+
+        if msg_id:
+            try:
+                await self.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except TelegramError:
+                pass
+
+        sent = await self.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+        self._panel_msg_id[user_id] = sent.message_id
+
+    @staticmethod
+    async def _try_delete(message) -> None:
+        if not message:
+            return
+        try:
+            await message.delete()
+        except TelegramError:
+            pass
+
+    # ------------------------------------------------- Clean Menu Views
+    def _view_welcome(self, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        head = f"{notice}\n\n" if notice else ""
         text = (
-            "👋 <b>Welcome to Hyper Insta Bridge</b>\n\n"
-            "Manage your Instagram accounts, Realtime MQTT/FBNS channels, session files, "
-            "and Telegram Forum bridge directly from this bot.\n\n"
-            "Choose an option below to get started:"
+            f"{head}"
+            "<b>Hyper Insta Bridge</b>\n"
+            "Sign in to your workspace or create a new one."
         )
         rows = [
             [
-                InlineKeyboardButton("🆕 Register New Workspace", callback_data="auth:register"),
-                InlineKeyboardButton("🔑 Login Existing Workspace", callback_data="auth:login"),
+                InlineKeyboardButton("🔑 Login", callback_data="auth:login"),
+                InlineKeyboardButton("🆕 Register", callback_data="auth:register"),
             ]
         ]
         return text, InlineKeyboardMarkup(rows)
 
-    def _control_panel_view(self, ws) -> tuple[str, InlineKeyboardMarkup]:
+    def _view_home(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         slot = ws.get_attached_slot() or ws.get_active_slot()
-        chat_str = f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "<i>Not linked yet (send /link in your Forum Group)</i>"
-
+        group_str = f"Linked (<code>{ws.tg_chat_id}</code>)" if ws.tg_chat_id else "Not linked"
         if slot:
-            st_icon = "🟢 Logged In" if slot.ig.logged_in else "🟠 Logged Out"
-            rt_str = "ON (Connected)" if slot.ig.realtime.rt_connected else ("ON" if slot.cfg.realtime else "OFF")
-            fbns_str = "ON (Connected)" if slot.ig.realtime.fbns_connected else ("ON" if slot.cfg.fbns else "OFF")
-            acc_summary = (
-                f"📸 <b>Attached IG Account:</b> <code>@{slot.ig_username}</code>\n"
-                f"🔐 <b>Auth Status:</b> {st_icon} ({slot.ig.auth.login_method})\n"
-                f"⚡ <b>Realtime MQTT:</b> {rt_str} · 🔔 <b>FBNS:</b> {fbns_str}\n"
-                f"💬 <b>Bridged Topics:</b> {len(slot.bridge.topics)} · <b>DMs Forwarded:</b> {slot.bridge.forwarded}"
+            badge = "🟢 Online" if slot.ig.logged_in else "🟠 Offline"
+            ig_str = f"<code>@{slot.ig_username}</code> ({badge})"
+        else:
+            ig_str = "None"
+
+        head = f"{notice}\n\n" if notice else ""
+        text = (
+            f"{head}"
+            f"<b>Hyper Insta Bridge</b>\n\n"
+            f"👤 <b>Workspace:</b> <code>{ws.username}</code>\n"
+            f"💬 <b>Group:</b> {group_str}\n"
+            f"📸 <b>Bridged IG:</b> {ig_str}"
+        )
+        count = len(ws.slots)
+        rows = [
+            [
+                InlineKeyboardButton(f"📸 Accounts ({count})", callback_data="nav:accounts"),
+                InlineKeyboardButton("➕ Add IG", callback_data="nav:add_ig"),
+            ],
+            [
+                InlineKeyboardButton("📊 Status", callback_data="nav:status"),
+                InlineKeyboardButton("🔗 Link Group", callback_data="nav:group"),
+            ],
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data="nav:home"),
+                InlineKeyboardButton("🚪 Sign Out", callback_data="auth:logout"),
+            ],
+        ]
+        return text, InlineKeyboardMarkup(rows)
+
+    def _view_accounts(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        head = f"{notice}\n\n" if notice else ""
+        if not ws.slots:
+            text = (
+                f"{head}"
+                "<b>Instagram Accounts</b>\n\n"
+                "No Instagram accounts added yet."
             )
         else:
-            acc_summary = "📸 <b>Instagram Accounts:</b> <i>None added yet. Click ➕ Login IG below to add one.</i>"
-
-        text = (
-            f"🎛 <b>Hyper Insta Control Center</b>\n"
-            f"👤 <b>Workspace DB:</b> <code>{ws.username}</code>\n"
-            f"📡 <b>Forum Group ID:</b> {chat_str}\n\n"
-            f"{acc_summary}\n\n"
-            f"<i>Select an Instagram account below to attach it to your Telegram bridge, or manage your session:</i>"
-        )
+            text = (
+                f"{head}"
+                "<b>Instagram Accounts</b>\n"
+                "Tap an account to manage it or attach it to the bridge:"
+            )
 
         rows: list[list[InlineKeyboardButton]] = []
-        # Account selector buttons (choose which IG account is attached to the bridge)
-        if ws.slots:
-            acc_btns = []
-            for ig_u, s in ws.slots.items():
-                is_attached = (ig_u == ws.bridged_ig)
-                prefix = "✅ " if is_attached else "⚪ "
-                online = "🟢" if s.ig.logged_in else "🟠"
-                acc_btns.append(
+        for ig_u, s in ws.slots.items():
+            is_attached = (ig_u == ws.bridged_ig)
+            pin = "✅" if is_attached else "⚪"
+            dot = "🟢" if s.ig.logged_in else "🟠"
+            rows.append(
+                [
                     InlineKeyboardButton(
-                        f"{prefix}@{ig_u} {online}",
-                        callback_data=f"ig:attach:{ig_u}",
+                        f"{pin} @{ig_u} ({dot})",
+                        callback_data=f"acct:view:{ig_u}",
                     )
-                )
-            for i in range(0, len(acc_btns), 2):
-                rows.append(acc_btns[i : i + 2])
-
+                ]
+            )
         rows.append(
             [
-                InlineKeyboardButton("➕ Login IG (Password)", callback_data="ig:add_pw"),
-                InlineKeyboardButton("🍪 Login IG (Cookie)", callback_data="ig:add_ck"),
-            ]
-        )
-
-        if slot:
-            rt_lbl = f"⚡ Realtime: {'ON' if slot.cfg.realtime else 'OFF'}"
-            fb_lbl = f"🔔 FBNS: {'ON' if slot.cfg.fbns else 'OFF'}"
-            rows.append(
-                [
-                    InlineKeyboardButton(rt_lbl, callback_data=f"ig:toggle_rt:{slot.ig_username}"),
-                    InlineKeyboardButton(fb_lbl, callback_data=f"ig:toggle_fbns:{slot.ig_username}"),
-                ]
-            )
-            rows.append(
-                [
-                    InlineKeyboardButton("📊 Status", callback_data="cmd:status"),
-                    InlineKeyboardButton("📱 Device Info", callback_data="cmd:session"),
-                    InlineKeyboardButton("📥 Session .json", callback_data=f"ig:dl:{slot.ig_username}"),
-                ]
-            )
-            rows.append(
-                [
-                    InlineKeyboardButton("🔄 Relogin", callback_data="cmd:relogin"),
-                    InlineKeyboardButton("💬 Set Group ID", callback_data="ws:set_group"),
-                    InlineKeyboardButton("🚪 Logout IG", callback_data=f"ig:logout:{slot.ig_username}"),
-                ]
-            )
-        else:
-            rows.append(
-                [
-                    InlineKeyboardButton("💬 Set Group Chat ID", callback_data="ws:set_group"),
-                ]
-            )
-
-        rows.append(
-            [
-                InlineKeyboardButton("🔀 Switch / Sign Out", callback_data="auth:switch"),
-                InlineKeyboardButton("🔄 Refresh Panel", callback_data="panel:refresh"),
+                InlineKeyboardButton("➕ Add IG", callback_data="nav:add_ig"),
+                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
             ]
         )
         return text, InlineKeyboardMarkup(rows)
 
+    def _view_account_card(self, ws, ig_u: str, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        slot = ws.slots.get(ig_u)
+        if not slot:
+            return self._view_accounts(ws, notice="⚠️ Account not found.")
+
+        is_attached = (ig_u == ws.bridged_ig)
+        status_str = "🟢 Logged In" if slot.ig.logged_in else "🟠 Logged Out"
+        rt_str = "ON" if slot.cfg.realtime else "OFF"
+        fbns_str = "ON" if slot.cfg.fbns else "OFF"
+        head = f"{notice}\n\n" if notice else ""
+
+        text = (
+            f"{head}"
+            f"<b>@{slot.ig_username}</b>\n\n"
+            f"Status: {status_str} (<code>{slot.ig.auth.login_method}</code>)\n"
+            f"Realtime: <b>{rt_str}</b> · FBNS: <b>{fbns_str}</b>\n"
+            f"Bridged Topics: <b>{len(slot.bridge.topics)}</b>"
+        )
+
+        attach_btn = (
+            InlineKeyboardButton("✅ Attached to Bridge", callback_data=f"acct:attach:{ig_u}")
+            if is_attached
+            else InlineKeyboardButton("📌 Attach to Bridge", callback_data=f"acct:attach:{ig_u}")
+        )
+
+        rows = [
+            [attach_btn],
+            [
+                InlineKeyboardButton(f"⚡ Realtime: {rt_str}", callback_data=f"acct:rt:{ig_u}"),
+                InlineKeyboardButton(f"🔔 FBNS: {fbns_str}", callback_data=f"acct:fbns:{ig_u}"),
+            ],
+            [
+                InlineKeyboardButton("🔄 Relogin", callback_data=f"acct:relogin:{ig_u}"),
+                InlineKeyboardButton("📥 Session .json", callback_data=f"acct:dl:{ig_u}"),
+            ],
+            [
+                InlineKeyboardButton("🗑 Logout IG", callback_data=f"acct:logout:{ig_u}"),
+                InlineKeyboardButton("⬅️ Back", callback_data="nav:accounts"),
+            ],
+        ]
+        return text, InlineKeyboardMarkup(rows)
+
+    def _view_add_ig(self, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        head = f"{notice}\n\n" if notice else ""
+        text = (
+            f"{head}"
+            "<b>Add Instagram Account</b>\n\n"
+            "Choose a login method below, or send a <code>session.json</code> file in this chat."
+        )
+        rows = [
+            [
+                InlineKeyboardButton("🔐 Password Login", callback_data="add:pw"),
+                InlineKeyboardButton("🍪 Cookie Login", callback_data="add:ck"),
+            ],
+            [
+                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+            ],
+        ]
+        return text, InlineKeyboardMarkup(rows)
+
+    def _view_status(self, ws) -> tuple[str, InlineKeyboardMarkup]:
+        slot = ws.get_attached_slot() or ws.get_active_slot()
+        group_str = f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "Not linked"
+        lines = [
+            "<b>Bridge Status</b>",
+            "",
+            f"👤 <b>Workspace:</b> <code>{ws.username}</code>",
+            f"💬 <b>Forum Group:</b> {group_str}",
+        ]
+        if slot:
+            st = "🟢 Online" if slot.ig.logged_in else "🟠 Offline"
+            rt = "🟢 Connected" if slot.ig.realtime.rt_connected else ("ON" if slot.cfg.realtime else "OFF")
+            fb = "🟢 Connected" if slot.ig.realtime.fbns_connected else ("ON" if slot.cfg.fbns else "OFF")
+            lines.extend(
+                [
+                    f"📸 <b>Attached IG:</b> <code>@{slot.ig_username}</code> ({st})",
+                    f"⚡ <b>Realtime MQTT:</b> {rt} ({slot.ig.realtime.events} events)",
+                    f"🔔 <b>FBNS Push:</b> {fb} ({slot.ig.realtime.pushes} pushes)",
+                    f"💬 <b>Topics:</b> {len(slot.bridge.topics)} · <b>Forwarded:</b> {slot.bridge.forwarded}",
+                ]
+            )
+        else:
+            lines.append("📸 <b>Attached IG:</b> None")
+
+        rows = [
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data="nav:status"),
+                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+            ]
+        ]
+        return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+    def _view_group(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        head = f"{notice}\n\n" if notice else ""
+        group_str = f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "Not linked"
+        text = (
+            f"{head}"
+            f"<b>Link Telegram Forum Group</b>\n\n"
+            f"Current Group: {group_str}\n\n"
+            f"1. Add @{self.bot_username} as an <b>Admin</b> in your Forum Group (enable <i>Manage Topics</i>).\n"
+            f"2. Type <code>/link</code> inside the group, or tap below to enter the Group ID."
+        )
+        rows = [
+            [
+                InlineKeyboardButton("✏️ Enter Group ID", callback_data="group:set"),
+                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+            ]
+        ]
+        return text, InlineKeyboardMarkup(rows)
+
+    @staticmethod
+    def _cancel_markup(target: str = "nav:home") -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=target)]])
+
     # ------------------------------------------------- Callback Query Handler
     async def _on_callback(self, update: Update, context) -> None:
         query = update.callback_query
-        if not query or not query.from_user:
+        if not query or not query.from_user or not query.message:
             return
         await query.answer()
         user_id = query.from_user.id
+        chat_id = query.message.chat_id
         data = query.data or ""
         mgr = self._manager
         if not mgr:
             return
 
-        if data in ("auth:register", "auth:login", "auth:switch"):
-            if data == "auth:switch":
+        # Clear any pending prompt state when navigating
+        self._chat_state.pop(user_id, None)
+
+        if data == "auth:cancel":
+            text, markup = self._view_welcome()
+            await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+            return
+
+        if data in ("auth:register", "auth:login", "auth:logout"):
+            if data == "auth:logout":
                 prev_ws = self._find_workspace_for_user(user_id)
                 if prev_ws:
                     await prev_ws.update_telegram({"tg_admin_id": "0"})
-                self._chat_state.pop(user_id, None)
-                text, markup = self._welcome_View()
-                await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+                text, markup = self._view_welcome("✅ Signed out.")
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
+
             mode = "register" if data == "auth:register" else "login"
-            self._chat_state[user_id] = {"step": "await_workspace_username", "mode": mode}
-            prompt = (
-                "🆕 <b>Register New Workspace</b>\n\n"
-                "Step 1/2: Reply with a new <b>username</b> for your workspace:"
-                if mode == "register"
-                else "🔑 <b>Sign In to Existing Workspace</b>\n\nStep 1/2: Reply with your <b>workspace username</b>:"
+            self._chat_state[user_id] = {"step": "ws_user", "mode": mode}
+            title = "🆕 <b>Register Workspace</b>" if mode == "register" else "🔑 <b>Workspace Login</b>"
+            await self._show_panel(
+                chat_id,
+                user_id,
+                f"{title}\n\nSend your <b>workspace username</b>:",
+                self._cancel_markup("auth:cancel"),
+                edit_msg=query.message,
             )
-            await query.message.reply_text(prompt, parse_mode="HTML")
             return
 
         ws = self._find_workspace_for_user(user_id)
         if not ws:
-            text, markup = self._welcome_View()
-            await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+            text, markup = self._view_welcome()
+            await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
             return
 
         tok = current_user_var.set(ws.username)
         try:
-            if data == "panel:refresh":
-                text, markup = self._control_panel_view(ws)
+            # Buttons owned by a module ("m:<prefix>:<rest>"), e.g. the /dump menu.
+            if data.startswith("m:"):
+                prefix, _, rest = data[2:].partition(":")
+                slot = ws.get_attached_slot() or ws.get_active_slot()
+                found = slot.modules.all_callbacks().get(prefix) if slot else None
+                if not found:
+                    return
                 try:
-                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-                except TelegramError:
-                    await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+                    await found[0](rest, query, context)
+                except Exception as e:
+                    log.warning("Button handler %s failed: %s", prefix, e)
+                    try:
+                        await query.message.reply_text(f"❌ {type(e).__name__}: {e}")
+                    except TelegramError:
+                        pass
                 return
 
-            if data.startswith("ig:attach:"):
+            if data == "nav:home":
+                text, markup = self._view_home(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "nav:accounts":
+                text, markup = self._view_accounts(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "nav:add_ig":
+                text, markup = self._view_add_ig()
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "nav:status":
+                text, markup = self._view_status(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "nav:group":
+                text, markup = self._view_group(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data == "group:set":
+                self._chat_state[user_id] = {"step": "group_id"}
+                await self._show_panel(
+                    chat_id,
+                    user_id,
+                    "<b>Set Forum Group ID</b>\n\nSend your Group Chat ID (starts with <code>-100</code>):",
+                    self._cancel_markup("nav:group"),
+                    edit_msg=query.message,
+                )
+                return
+
+            if data in ("add:pw", "add:ck"):
+                login_type = "pw" if data == "add:pw" else "ck"
+                label = "🔐 <b>Password Login</b>" if login_type == "pw" else "🍪 <b>Cookie Login</b>"
+                self._chat_state[user_id] = {"step": "ig_user", "login_type": login_type}
+                await self._show_panel(
+                    chat_id,
+                    user_id,
+                    f"{label}\n\nSend the <b>Instagram username</b>:",
+                    self._cancel_markup("nav:add_ig"),
+                    edit_msg=query.message,
+                )
+                return
+
+            if data.startswith("acct:view:"):
+                ig_u = sanitize_username(data.split(":", 2)[2])
+                text, markup = self._view_account_card(ws, ig_u)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data.startswith("acct:attach:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 await ws.attach_account(ig_u)
-                text, markup = self._control_panel_view(ws)
-                try:
-                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-                except TelegramError:
-                    await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+                text, markup = self._view_account_card(ws, ig_u, notice=f"📌 Attached @{ig_u} to bridge.")
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
-            if data == "ig:add_pw":
-                self._chat_state[user_id] = {"step": "await_ig_pw"}
-                await query.message.reply_text(
-                    "🔐 <b>Instagram Password Login</b>\n"
-                    "<i>(Realtime &amp; FBNS will be automatically enabled)</i>\n\n"
-                    "Reply in this format:\n"
-                    "<code>ig_username password</code>\n"
-                    "or with a proxy:\n"
-                    "<code>ig_username password http://user:pass@host:port</code>",
-                    parse_mode="HTML",
-                )
-                return
-
-            if data == "ig:add_ck":
-                self._chat_state[user_id] = {"step": "await_ig_ck"}
-                await query.message.reply_text(
-                    "🍪 <b>Instagram Cookie Login</b>\n"
-                    "<i>(Realtime &amp; FBNS will be automatically disabled)</i>\n\n"
-                    "Reply in this format:\n"
-                    "<code>ig_username sessionid_cookie</code>\n"
-                    "or with a proxy:\n"
-                    "<code>ig_username sessionid_cookie http://user:pass@host:port</code>",
-                    parse_mode="HTML",
-                )
-                return
-
-            if data == "ws:set_group":
-                self._chat_state[user_id] = {"step": "await_group_id"}
-                await query.message.reply_text(
-                    "💬 <b>Link Telegram Forum Group</b>\n\n"
-                    "Reply with your Forum Group's Chat ID (starts with <code>-100</code>), "
-                    "OR simply add this bot as an Admin in your Forum Group and type <code>/link</code> inside the group.",
-                    parse_mode="HTML",
-                )
-                return
-
-            if data.startswith("ig:toggle_rt:"):
+            if data.startswith("acct:rt:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 slot = ws.slots.get(ig_u)
                 if slot:
                     await slot.apply_config({"realtime": not slot.cfg.realtime})
-                text, markup = self._control_panel_view(ws)
-                try:
-                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-                except TelegramError:
-                    pass
+                text, markup = self._view_account_card(ws, ig_u)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
-            if data.startswith("ig:toggle_fbns:"):
+            if data.startswith("acct:fbns:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 slot = ws.slots.get(ig_u)
                 if slot:
                     await slot.apply_config({"fbns": not slot.cfg.fbns})
-                text, markup = self._control_panel_view(ws)
-                try:
-                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-                except TelegramError:
-                    pass
+                text, markup = self._view_account_card(ws, ig_u)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
-            if data.startswith("ig:dl:"):
+            if data.startswith("acct:relogin:"):
+                ig_u = sanitize_username(data.split(":", 2)[2])
+                slot = ws.slots.get(ig_u)
+                if slot:
+                    await self._show_panel(
+                        chat_id,
+                        user_id,
+                        f"⏳ Re-logging in to <b>@{ig_u}</b>...",
+                        edit_msg=query.message,
+                    )
+                    ok, msg_txt = await slot.relogin()
+                    notice = f"{'✅' if ok else '❌'} {msg_txt}"
+                    text, markup = self._view_account_card(ws, ig_u, notice=notice)
+                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data.startswith("acct:dl:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 slot = ws.slots.get(ig_u)
                 session_obj = await slot.get_session_json() if slot else None
                 if not session_obj:
-                    await query.message.reply_text("⚠️ No saved session found for this account yet.")
+                    text, markup = self._view_account_card(ws, ig_u, notice="⚠️ No saved session file yet.")
+                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                     return
                 raw_bytes = json.dumps(session_obj, indent=2, default=str).encode("utf-8")
                 await query.message.reply_document(
@@ -412,26 +616,13 @@ class _TokenHub:
                 )
                 return
 
-            if data.startswith("ig:logout:"):
+            if data.startswith("acct:logout:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 slot = ws.slots.get(ig_u)
                 if slot:
                     await slot.logout()
-                text, markup = self._control_panel_view(ws)
-                try:
-                    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-                except TelegramError:
-                    pass
-                return
-
-            if data.startswith("cmd:"):
-                cmd_name = data.split(":", 1)[1]
-                slot = ws.get_attached_slot() or ws.get_active_slot()
-                if not slot:
-                    await query.message.reply_text("⚠️ Add and select an Instagram account first.")
-                    return
-                reply = await slot.run_command(f"/{cmd_name}")
-                await query.message.reply_text(reply)
+                text, markup = self._view_account_card(ws, ig_u, notice=f"🚪 Logged out @{ig_u}.")
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
         finally:
             current_user_var.reset(tok)
@@ -446,7 +637,7 @@ class _TokenHub:
 
         text = (message.text or "").strip()
 
-        # 1. Private Chat with Bot: Registration, Login, Control Center & Direct Commands
+        # 1. Private Chat with Bot
         if chat.type == "private" and user:
             await self._handle_private_message(update, user.id, text)
             return
@@ -457,19 +648,17 @@ class _TokenHub:
             if ws:
                 await ws.update_telegram({"tg_chat_id": str(chat.id), "tg_admin_id": str(user.id)})
                 await message.reply_text(
-                    f"✅ Linked this Forum Group (<code>{chat.id}</code>) to your workspace <b>{ws.username}</b>.\n"
-                    f"Manage accounts and run commands directly in my private chat (@{self.bot_username}).",
+                    f"✅ Linked this Forum Group (<code>{chat.id}</code>) to workspace <b>{ws.username}</b>.",
                     parse_mode="HTML",
                 )
             else:
                 await message.reply_text(
                     f"ℹ️ Group Chat ID is <code>{chat.id}</code>.\n"
-                    f"Open @{self.bot_username} in private chat and send /start first to sign in to your workspace.",
+                    f"Open @{self.bot_username} in private chat and sign in first.",
                     parse_mode="HTML",
                 )
             return
 
-        # Ignore other slash commands in group chats (commands execute directly in the bot's private chat)
         if text.startswith("/"):
             return
 
@@ -491,58 +680,42 @@ class _TokenHub:
         finally:
             current_user_var.reset(tok)
 
-    async def _complete_workspace_auth(self, message, user_id: int, uname: str, password: str, mode: str) -> bool:
+    async def _complete_workspace_auth(
+        self, chat_id: int, user_id: int, uname: str, password: str, mode: str
+    ) -> None:
         mgr = self._manager
         if mode == "register":
             if mgr.workspace_exists(uname):
                 self._chat_state.pop(user_id, None)
-                await message.reply_text(
-                    f"❌ Workspace <b>{uname}</b> is already registered.\n"
-                    f"Click <b>🔑 Login Existing Workspace</b> and enter your password to sign in.",
-                    parse_mode="HTML",
-                )
-                return False
+                text, markup = self._view_welcome(f"❌ Workspace <b>{uname}</b> already exists. Tap <b>Login</b>.")
+                await self._show_panel(chat_id, user_id, text, markup)
+                return
             prev_ws = self._find_workspace_for_user(user_id)
             if prev_ws and prev_ws.username != uname:
                 await prev_ws.update_telegram({"tg_admin_id": "0"})
             ws = await mgr.register_workspace(uname, password)
             await ws.update_telegram({"tg_admin_id": str(user_id)})
             self._chat_state.pop(user_id, None)
-            try:
-                await message.delete()
-            except TelegramError:
-                pass
-            await message.chat.send_message(
-                f"✅ Registered and authenticated workspace <b>{ws.username}</b>!",
-                parse_mode="HTML",
-            )
-            view_text, markup = self._control_panel_view(ws)
-            await message.chat.send_message(view_text, parse_mode="HTML", reply_markup=markup)
-            return True
+            text, markup = self._view_home(ws, notice=f"✅ Created workspace <b>{ws.username}</b>.")
+            await self._show_panel(chat_id, user_id, text, markup)
         else:
             ws, err = await mgr.authenticate_workspace(uname, password)
             if not ws:
-                await message.reply_text(f"🔒 <b>Authentication Failed:</b> {err}", parse_mode="HTML")
-                return False
+                self._chat_state.pop(user_id, None)
+                text, markup = self._view_welcome(f"🔒 {err}")
+                await self._show_panel(chat_id, user_id, text, markup)
+                return
             prev_ws = self._find_workspace_for_user(user_id)
             if prev_ws and prev_ws.username != uname:
                 await prev_ws.update_telegram({"tg_admin_id": "0"})
             await ws.update_telegram({"tg_admin_id": str(user_id)})
             self._chat_state.pop(user_id, None)
-            try:
-                await message.delete()
-            except TelegramError:
-                pass
-            await message.chat.send_message(
-                f"✅ Signed in to workspace <b>{ws.username}</b>!",
-                parse_mode="HTML",
-            )
-            view_text, markup = self._control_panel_view(ws)
-            await message.chat.send_message(view_text, parse_mode="HTML", reply_markup=markup)
-            return True
+            text, markup = self._view_home(ws, notice=f"✅ Signed in to <b>{ws.username}</b>.")
+            await self._show_panel(chat_id, user_id, text, markup)
 
     async def _handle_private_message(self, update: Update, user_id: int, text: str) -> None:
         message = update.effective_message
+        chat_id = message.chat_id
         mgr = self._manager
         if not mgr:
             return
@@ -550,179 +723,194 @@ class _TokenHub:
         ws = self._find_workspace_for_user(user_id)
         state = self._chat_state.get(user_id)
 
-        # Quick /login <username> <password> or /register <username> <password>
-        if text.startswith(("/login ", "/register ")):
-            parts = text.split(None, 2)
-            mode = "register" if parts[0].startswith("/register") else "login"
-            if len(parts) == 3:
-                uname = sanitize_username(parts[1])
-                if uname:
-                    await self._complete_workspace_auth(message, user_id, uname, parts[2].strip(), mode)
-                    return
-            elif len(parts) == 2:
-                uname = sanitize_username(parts[1])
-                if uname:
-                    self._chat_state[user_id] = {"step": "await_workspace_password", "mode": mode, "username": uname}
-                    await message.reply_text(
-                        f"🔐 Step 2/2: Reply with the <b>password</b> for workspace <code>{uname}</code>:",
-                        parse_mode="HTML",
-                    )
-                    return
-
-        # Step 1: Awaiting workspace username during Registration / Login
-        if state and state.get("step") == "await_workspace_username" and not text.startswith("/"):
+        # Workspace Login / Register Step 1: Username
+        if state and state.get("step") == "ws_user" and not text.startswith("/"):
+            await self._try_delete(message)
             uname = sanitize_username(text)
             if not uname:
-                await message.reply_text("⚠️ Please send a valid username (letters, numbers, dots, underscores).")
+                await self._show_panel(
+                    chat_id,
+                    user_id,
+                    "⚠️ Enter a valid username (letters, numbers, dots, underscores):",
+                    self._cancel_markup("auth:cancel"),
+                )
                 return
             mode = state.get("mode", "login")
             if mode == "register" and mgr.workspace_exists(uname):
-                await message.reply_text(
-                    f"❌ Workspace <b>{uname}</b> is already registered.\n"
-                    f"Reply with a different username, or click <b>🔑 Login Existing Workspace</b>.",
-                    parse_mode="HTML",
-                )
+                self._chat_state.pop(user_id, None)
+                v_txt, markup = self._view_welcome(f"❌ Workspace <b>{uname}</b> already exists. Tap <b>Login</b>.")
+                await self._show_panel(chat_id, user_id, v_txt, markup)
                 return
             if mode == "login" and not mgr.workspace_exists(uname):
-                await message.reply_text(
-                    f"❌ Workspace <b>{uname}</b> does not exist.\n"
-                    f"Check the spelling or click <b>🆕 Register New Workspace</b> to create it.",
-                    parse_mode="HTML",
+                self._chat_state.pop(user_id, None)
+                v_txt, markup = self._view_welcome(f"❌ Workspace <b>{uname}</b> not found. Tap <b>Register</b>.")
+                await self._show_panel(chat_id, user_id, v_txt, markup)
+                return
+            self._chat_state[user_id] = {"step": "ws_pass", "mode": mode, "username": uname}
+            prompt = (
+                f"🆕 <b>Register: {uname}</b>\n\nSend a new <b>password</b> (min 4 characters):"
+                if mode == "register"
+                else f"🔑 <b>Login: {uname}</b>\n\nSend your <b>password</b>:"
+            )
+            await self._show_panel(chat_id, user_id, prompt, self._cancel_markup("auth:cancel"))
+            return
+
+        # Workspace Login / Register Step 2: Password
+        if state and state.get("step") == "ws_pass" and not text.startswith("/"):
+            await self._try_delete(message)
+            pw = text.strip()
+            uname = state.get("username", "")
+            mode = state.get("mode", "login")
+            if len(pw) < 4:
+                await self._show_panel(
+                    chat_id,
+                    user_id,
+                    f"⚠️ Password must be at least 4 characters.\n\nSend password for <b>{uname}</b>:",
+                    self._cancel_markup("auth:cancel"),
                 )
                 return
-            self._chat_state[user_id] = {"step": "await_workspace_password", "mode": mode, "username": uname}
-            await message.reply_text(
-                f"🔐 Step 2/2: Create a <b>password</b> for new workspace <code>{uname}</code> (min 4 characters):"
-                if mode == "register"
-                else f"🔐 Step 2/2: Enter your <b>password</b> for workspace <code>{uname}</code>:",
-                parse_mode="HTML",
-            )
+            await self._complete_workspace_auth(chat_id, user_id, uname, pw, mode)
             return
 
-        # Step 2: Awaiting workspace password during Registration / Login
-        if state and state.get("step") == "await_workspace_password" and not text.startswith("/"):
-            pw = text.strip()
-            if len(pw) < 4:
-                await message.reply_text("⚠️ Password must be at least 4 characters. Please reply with your password:")
-                return
-            await self._complete_workspace_auth(
-                message,
-                user_id,
-                state.get("username", ""),
-                pw,
-                state.get("mode", "login"),
-            )
-            return
-
-        # If not registered/logged into a workspace yet, prompt to register or login
         if not ws:
-            view_text, markup = self._welcome_View()
-            await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
+            v_txt, markup = self._view_welcome()
+            await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
             return
 
         tok = current_user_var.set(ws.username)
         try:
-            # Check if any slot is currently waiting for a 2FA / Challenge verification code
+            # 1. Check if any Instagram slot is waiting for a 2FA / Challenge verification code
             for s in ws.slots.values():
                 if s.ig.auth.prompter.waiting and text and not text.startswith("/"):
+                    await self._try_delete(message)
                     code = text.strip().replace(" ", "")
                     if s.ig.auth.prompter.submit(code):
-                        await message.reply_text(f"✅ Verification code submitted for @{s.ig_username}.")
+                        await self._show_panel(
+                            chat_id,
+                            user_id,
+                            f"✅ Verification code submitted for <b>@{s.ig_username}</b>. Completing login...",
+                        )
                         return
 
-            # Handle uploaded session.json document in private chat
+            # 2. Handle uploaded session.json file
             if message.document and (message.document.file_name or "").endswith(".json"):
                 tg_file = await message.document.get_file()
                 raw_bytes = await tg_file.download_as_bytearray()
                 raw_json = raw_bytes.decode("utf-8", errors="replace")
-                ig_u = sanitize_username(message.document.file_name.replace("_session.json", "").replace(".json", ""))
+                ig_u = sanitize_username(
+                    message.document.file_name.replace("_session.json", "").replace(".json", "")
+                )
                 slot = await ws.ensure_slot(ig_u or ws.bridged_ig or ws.username)
                 ok, msg_txt = await slot.import_session(raw_json)
                 if ok and not ws.bridged_ig:
                     await ws.attach_account(slot.ig_username)
-                await message.reply_text(f"{'✅' if ok else '❌'} {msg_txt}")
-                view_text, markup = self._control_panel_view(ws)
-                await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
+                await self._try_delete(message)
+                notice = f"{'✅' if ok else '❌'} {msg_txt}"
+                v_txt, markup = self._view_account_card(ws, slot.ig_username, notice=notice)
+                await self._show_panel(chat_id, user_id, v_txt, markup)
                 return
 
-            # Conversational step handlers
+            # 3. Conversational prompts (Group ID, IG Username, IG Password/Cookie)
             if state and not text.startswith("/"):
                 step = state.get("step")
-                self._chat_state.pop(user_id, None)
 
-                if step == "await_group_id":
+                if step == "group_id":
+                    await self._try_delete(message)
+                    self._chat_state.pop(user_id, None)
                     try:
                         await ws.update_telegram({"tg_chat_id": text.strip()})
-                        await message.reply_text(f"✅ Telegram Forum Group Chat ID set to <code>{ws.tg_chat_id}</code>.", parse_mode="HTML")
+                        notice = f"✅ Linked Forum Group <code>{ws.tg_chat_id}</code>."
                     except Exception as e:
-                        await message.reply_text(f"❌ {e}")
-                    view_text, markup = self._control_panel_view(ws)
-                    await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
+                        notice = f"❌ {e}"
+                    v_txt, markup = self._view_home(ws, notice=notice)
+                    await self._show_panel(chat_id, user_id, v_txt, markup)
                     return
 
-                if step == "await_ig_pw":
-                    parts = text.split()
-                    if len(parts) < 2:
-                        await message.reply_text("⚠️ Format: <code>ig_username password [proxy]</code>", parse_mode="HTML")
+                if step == "ig_user":
+                    await self._try_delete(message)
+                    ig_u = sanitize_username(text)
+                    login_type = state.get("login_type", "pw")
+                    if not ig_u:
+                        await self._show_panel(
+                            chat_id,
+                            user_id,
+                            "⚠️ Send a valid Instagram username:",
+                            self._cancel_markup("nav:add_ig"),
+                        )
                         return
-                    ig_u, pw = parts[0], parts[1]
-                    proxy = parts[2] if len(parts) > 2 else ""
+                    self._chat_state[user_id] = {
+                        "step": "ig_secret",
+                        "login_type": login_type,
+                        "ig_username": ig_u,
+                    }
+                    secret_name = "password" if login_type == "pw" else "sessionid cookie"
+                    await self._show_panel(
+                        chat_id,
+                        user_id,
+                        f"<b>@{ig_u}</b>\n\nSend your Instagram <b>{secret_name}</b>:",
+                        self._cancel_markup("nav:add_ig"),
+                    )
+                    return
+
+                if step == "ig_secret":
+                    await self._try_delete(message)
+                    secret = text.strip()
+                    ig_u = state.get("ig_username", "")
+                    login_type = state.get("login_type", "pw")
+                    self._chat_state.pop(user_id, None)
+
                     slot = await ws.ensure_slot(ig_u)
                     await ws.attach_account(slot.ig_username)
-                    wait_msg = await message.reply_text(f"⏳ Logging in to @{slot.ig_username} (Realtime=ON, FBNS=ON)...")
-                    ok, res_msg = await slot.login_with_password({"password": pw, "proxy": proxy})
-                    await wait_msg.edit_text(f"{'✅' if ok else '❌'} {res_msg}")
-                    view_text, markup = self._control_panel_view(ws)
-                    await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
+                    await self._show_panel(
+                        chat_id,
+                        user_id,
+                        f"⏳ <b>Logging in to @{slot.ig_username}...</b>\nPlease wait a moment.",
+                    )
+                    if login_type == "pw":
+                        ok, res_msg = await slot.login_with_password({"password": secret})
+                    else:
+                        ok, res_msg = await slot.login_with_cookie(secret)
+                    notice = f"{'✅' if ok else '❌'} {res_msg}"
+                    v_txt, markup = self._view_account_card(ws, slot.ig_username, notice=notice)
+                    await self._show_panel(chat_id, user_id, v_txt, markup)
                     return
 
-                if step == "await_ig_ck":
-                    parts = text.split()
-                    if len(parts) < 2:
-                        await message.reply_text("⚠️ Format: <code>ig_username sessionid_cookie [proxy]</code>", parse_mode="HTML")
-                        return
-                    ig_u, ck = parts[0], parts[1]
-                    proxy = parts[2] if len(parts) > 2 else ""
-                    slot = await ws.ensure_slot(ig_u)
-                    await ws.attach_account(slot.ig_username)
-                    wait_msg = await message.reply_text(f"⏳ Validating cookie for @{slot.ig_username} (Realtime=OFF, FBNS=OFF)...")
-                    ok, res_msg = await slot.login_with_cookie(ck, proxy=proxy)
-                    await wait_msg.edit_text(f"{'✅' if ok else '❌'} {res_msg}")
-                    view_text, markup = self._control_panel_view(ws)
-                    await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
-                    return
-
-            # Slash commands in Bot Private Chat
+            # 4. Slash Commands
             if text.startswith("/"):
+                self._chat_state.pop(user_id, None)
                 parts = text.split()
                 cmd_name = parts[0][1:].split("@")[0].lower()
                 args = parts[1:]
 
-                if cmd_name in ("start", "panel", "menu"):
-                    view_text, markup = self._control_panel_view(ws)
-                    await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
+                if cmd_name in ("start", "menu", "panel"):
+                    v_txt, markup = self._view_home(ws)
+                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
                     return
 
-                if cmd_name == "attach" and args:
-                    await ws.attach_account(args[0])
-                    await message.reply_text(f"✅ Attached @{ws.bridged_ig} to the Telegram bridge.")
+                if cmd_name == "accounts":
+                    v_txt, markup = self._view_accounts(ws)
+                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                    return
+
+                if cmd_name == "status":
+                    v_txt, markup = self._view_status(ws)
+                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                    return
+
+                if cmd_name == "logout":
+                    await ws.update_telegram({"tg_admin_id": "0"})
+                    v_txt, markup = self._view_welcome("✅ Signed out.")
+                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
                     return
 
                 slot = ws.get_attached_slot() or ws.get_active_slot()
-                if not slot:
-                    view_text, markup = self._control_panel_view(ws)
-                    await message.reply_text(
-                        "⚠️ Add an Instagram account first using the buttons below:",
-                        reply_markup=markup,
-                    )
+                if slot:
+                    await slot.bridge._handle_command(cmd_name, args, update)
                     return
 
-                await slot.bridge._handle_command(cmd_name, args, update)
-                return
-
-            # Default: show control panel
-            view_text, markup = self._control_panel_view(ws)
-            await message.reply_text(view_text, parse_mode="HTML", reply_markup=markup)
+            # Default: show Home Menu
+            v_txt, markup = self._view_home(ws)
+            await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
         finally:
             current_user_var.reset(tok)
 
@@ -1042,12 +1230,17 @@ class TelegramBridge:
             return
         command, _mod = found
         try:
-            reply = await command.handler(args)
+            if command.takes_update:
+                await command.handler(args, update)  # the command sends its own reply
+                reply = None
+            else:
+                reply = await command.handler(args)
         except Exception as e:
             log.warning("Command /%s failed: %s", cmd_name, e)
             reply = f"❌ {type(e).__name__}: {e}"
         message = update.effective_message
-        await message.reply_text(reply)
+        if reply:
+            await message.reply_text(reply)
         if command.sensitive:
             try:
                 await message.delete()
