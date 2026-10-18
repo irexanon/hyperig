@@ -70,6 +70,7 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 | `/resetsession confirm` | forget session AND device, log in as a new device (last resort) |
 | `/logout confirm` | log out on Instagram and forget the session |
 | `/dump <user or link>` | profile card with buttons: posts, reels, stories, highlights, profile pic, JSON |
+| `/dl <Instagram URL> [audio]` | download a Reel, post, carousel, Story or Highlight; add `audio` for Reel audio |
 | `/profile <user>` | detailed public profile info |
 | `/pfp <user>` | profile picture, full size |
 | `/posts <user> [n]`, `/reels <user> [n]` | latest posts (1-20) or reels (1-10) |
@@ -82,6 +83,19 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 jitter and a pause between accounts. Existing posts and stories are recorded when you add an account, so you
 only get what appears afterwards. Seen items are saved, so restarts never repeat or lose anything. A rate limit
 from Instagram pauses all checks for 15 minutes and tells you once; an account that turns private is removed.
+
+## Instagram link downloader
+
+Paste an Instagram URL into the bot's private chat to trigger automatic detection, or use
+`/dl <URL>`. Reels download as video; posts download as a photo, video, or carousel album;
+Story links download the story; Highlight links download the highlight's available items.
+Profile URLs open the existing public-profile card. After a Reel download, use **Download original
+audio** when Instagram exposes an available soundtrack. Audio extraction is best-effort: licensed
+tracks and some private or unavailable media cannot be downloaded through Instagram's API.
+
+Downloads run in a temporary directory and are uploaded to Telegram; the files are removed afterward.
+Instagram must be logged in for media downloads, and availability depends on what the authenticated
+account can access. Only use the feature for media you have permission to download.
 
 The profile tools (`modules/dump.py`) work on **public accounts only**; a private account just shows its
 public card. They never show or export phone numbers, e-mail addresses or street addresses. One job runs
