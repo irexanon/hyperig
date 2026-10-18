@@ -174,11 +174,17 @@ class AutoDownloadModule(BaseModule):
             elif path.is_file():
                 paths.append(path)
         if not paths:
-            paths = [p for p in folder.rglob("*") if p.is_file()]
-        unique: dict[str, Path] = {}
+            # Folder scan is only a fallback if a helper returned no paths.
+            paths = sorted((p for p in folder.rglob("*") if p.is_file()), key=lambda path: path.name.lower())
+        unique: list[Path] = []
+        seen: set[str] = set()
         for path in paths:
-            unique[str(path.resolve())] = path
-        return sorted(unique.values(), key=lambda path: path.name.lower())
+            identity = str(path.resolve())
+            if identity not in seen:
+                seen.add(identity)
+                unique.append(path)
+        # Preserve album/highlight order returned by instagrapi.
+        return unique
 
     @staticmethod
     def _highlight_pk(cl, url: str) -> str:
@@ -195,6 +201,15 @@ class AutoDownloadModule(BaseModule):
             headers={"User-Agent": "Mozilla/5.0"},
         )
         final_url = response.url
+        if ("/highlights/" not in urlparse(final_url).path:
+            # Some /s/ share URLs return an HTML page instead of a direct redirect.
+            match = re.search(
+                r"https?://(?:www\\.)?instagram\\.com/stories/highlights/(\\d+)/?",
+                response.text,
+                re.I,
+            )
+            if match:
+                final_url = match.group(0)
         if (urlparse(final_url).hostname or "").lower() not in _ALLOWED_HOSTS:
             raise ValueError("Instagram highlight link redirected outside instagram.com.")
         return str(cl.highlight_pk_from_url(final_url))
@@ -222,7 +237,10 @@ class AutoDownloadModule(BaseModule):
 
         canonical_id = _nested(clips, "music_canonical_id")
         if canonical_id:
-            track = cl.track_info_by_canonical_id(str(canonical_id))
+            try:
+                track = cl.track_info_by_canonical_id(str(canonical_id))
+            except Exception:
+                track = None
             url = _find_url(track, keys)
             if url:
                 return url
@@ -321,7 +339,7 @@ class AutoDownloadModule(BaseModule):
                     )
                 else:
                     kind = "video" if suffix in (".mp4", ".mov", ".m4v", ".webm", ".mkv") else "photo"
-                    await send_one(bot, chat_id, kind, data, caption if offset else caption)
+                    await send_one(bot, chat_id, kind, data, caption if offset == 0 else "")
                 sent += 1
                 continue
 
