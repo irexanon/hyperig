@@ -958,6 +958,21 @@ async def _start_web_server(manager: MultiUserManager, host: str = "0.0.0.0", po
                         await writer.drain()
                         return
 
+                    if subpath == "telegram/bridge" and method == "POST":
+                        data = parse_json_body()
+                        if not isinstance(data.get("enabled"), bool):
+                            _send_json(writer, 400, {"error": "Bridge setting must include boolean 'enabled'."})
+                            await writer.drain()
+                            return
+                        await ws.set_bridge_enabled(data["enabled"])
+                        _send_json(writer, 200, {
+                            "ok": True,
+                            "bridge_enabled": ws.bridge_enabled,
+                            "state": await ws.to_state_dict(),
+                        })
+                        await writer.drain()
+                        return
+
                     if subpath == "accounts/attach" and method == "POST":
                         data = parse_json_body()
                         slot = await ws.attach_account(str(data.get("ig_username") or ""))
