@@ -268,13 +268,13 @@ class _TokenHub:
         else:
             ig_str = "No account added yet"
 
-        head = f"{notice}\\n\\n" if notice else ""
+        head = f"{notice}\n\n" if notice else ""
         text = (
-            f"{head}<b>Hyper Insta</b> · Workspace dashboard\\n\\n"
-            f"👤 <b>Workspace:</b> <code>{ws.username}</code>\\n"
-            f"📸 <b>Instagram:</b> {ig_str}\\n"
-            f"🔁 <b>DM bridge:</b> {bridge_state}\\n"
-            f"💬 <b>Telegram group:</b> {group_str}\\n\\n"
+            f"{head}<b>Hyper Insta</b> · Workspace dashboard\n\n"
+            f"👤 <b>Workspace:</b> <code>{ws.username}</code>\n"
+            f"📸 <b>Instagram:</b> {ig_str}\n"
+            f"🔁 <b>DM bridge:</b> {bridge_state}\n"
+            f"💬 <b>Telegram group:</b> {group_str}\n\n"
             "<i>Forward Instagram DMs to Telegram forum topics, manage multiple accounts, "
             "watch public-account updates, and download Instagram media. Use Settings to control routing.</i>"
         )
@@ -437,13 +437,13 @@ class _TokenHub:
         attached = f"@{slot.ig_username}" if slot else "No account selected"
         rt = "ON" if slot and slot.cfg.realtime else "OFF"
         fbns = "ON" if slot and slot.cfg.fbns else "OFF"
-        head = f"{notice}\\n\\n" if notice else ""
+        head = f"{notice}\n\n" if notice else ""
         text = (
-            f"{head}<b>⚙️ Settings &amp; Routing</b>\\n\\n"
-            f"DM bridge: <b>{'🟢 Enabled' if enabled else '⏸ Paused'}</b>\\n"
-            f"Attached account: <b>{attached}</b>\\n"
-            f"Forum group: {group}\\n"
-            f"Realtime MQTT: <b>{rt}</b> · FBNS: <b>{fbns}</b>\\n\\n"
+            f"{head}<b>⚙️ Settings &amp; Routing</b>\n\n"
+            f"DM bridge: <b>{'🟢 Enabled' if enabled else '⏸ Paused'}</b>\n"
+            f"Attached account: <b>{attached}</b>\n"
+            f"Forum group: {group}\n"
+            f"Realtime MQTT: <b>{rt}</b> · FBNS: <b>{fbns}</b>\n\n"
             "Choose the account that sends/receives bridged DMs. Pausing the bridge stops group routing; "
             "it does not log Instagram out. Watch monitoring is configured separately from DM routing."
         )
@@ -468,7 +468,7 @@ class _TokenHub:
         return text, InlineKeyboardMarkup(rows)
 
     def _view_settings_accounts(self, ws) -> tuple[str, InlineKeyboardMarkup]:
-        text = "<b>🔀 Choose Bridged Account</b>\\n\\nSelect one Instagram account for the Telegram DM bridge. Selecting it enables the bridge."
+        text = "<b>🔀 Choose Bridged Account</b>\n\nSelect one Instagram account for the Telegram DM bridge. Selecting it enables the bridge."
         rows: list[list[InlineKeyboardButton]] = []
         for ig_u, slot in ws.slots.items():
             mark = "✅ " if ig_u == ws.bridged_ig and getattr(ws, "bridge_enabled", True) else ""
@@ -583,8 +583,7 @@ class _TokenHub:
             if data == "nav:watch":
                 slot = ws.get_attached_slot() or ws.get_active_slot()
                 if slot:
-                    result = await slot.run_command("/watchlist")
-                    await self._show_panel(chat_id, user_id, result, None, edit_msg=query.message)
+                    await slot.bridge._handle_command("watchlist", [], update)
                 else:
                     text, markup = self._view_add_ig("Add and log in to an Instagram account before using Watch.")
                     await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
