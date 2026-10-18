@@ -119,6 +119,7 @@ class _TokenHub:
                     BotCommand("accounts", "Manage Instagram accounts"),
                     BotCommand("status", "Show connection status"),
                     BotCommand("watch", "Watch an account's new activity"),
+                    BotCommand("unwatch", "Stop watching an account"),
                     BotCommand("watchlist", "Manage watched accounts"),
                     BotCommand("dump", "Open a public profile with action buttons"),
                     BotCommand("dl", "Download an Instagram link"),
