@@ -1302,7 +1302,9 @@
             ? 'Add an Instagram account to enable routing.'
             : (!st.tg_chat_id
                 ? 'Choose an account, then configure the Telegram bot and Forum Group ID below.'
-                : (bridgeEnabled ? 'Routing is enabled for the selected bridged account.' : 'Forwarding is paused. Your saved sessions remain connected.'));
+                : (!bridgeEnabled
+                ? 'Forwarding is paused. Your saved sessions remain connected.'
+                : (st.tg_running ? 'Routing is connected for the selected account.' : 'Bridge is enabled but not connected. Check the bot token, group ID and group permissions.')));
 
         const bridgeSelect = document.getElementById('bridge-account-select');
         bridgeSelect.innerHTML = accounts.length
