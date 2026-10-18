@@ -201,10 +201,10 @@ class AutoDownloadModule(BaseModule):
             headers={"User-Agent": "Mozilla/5.0"},
         )
         final_url = response.url
-        if ("/highlights/" not in urlparse(final_url).path:
+        if "/highlights/" not in urlparse(final_url).path:
             # Some /s/ share URLs return an HTML page instead of a direct redirect.
             match = re.search(
-                r"https?://(?:www\\.)?instagram\\.com/stories/highlights/(\\d+)/?",
+                r"https?://(?:www\.)?instagram\.com/stories/highlights/(\d+)/?",
                 response.text,
                 re.I,
             )
