@@ -96,13 +96,27 @@ class _TokenHub:
     def _match_bridge(self, update: Update) -> "TelegramBridge | None":
         chat = update.effective_chat
         user = update.effective_user
+        message = update.effective_message
         if not chat:
             return None
-        for b in self.bridges:
-            if b.chat_id and chat.id == b.chat_id:
-                if b.cfg.tg_admin_id and user and user.id != b.cfg.tg_admin_id:
-                    return None
-                return b
+        matching_chat = [b for b in self.bridges if b.chat_id and chat.id == b.chat_id]
+        if matching_chat:
+            topic_id = getattr(message, "message_thread_id", None) if message else None
+            if topic_id is not None:
+                for b in matching_chat:
+                    if topic_id in b.threads:
+                        if b.cfg.tg_admin_id and user and user.id != b.cfg.tg_admin_id:
+                            return None
+                        return b
+            for b in matching_chat:
+                if b.ig and getattr(b.ig, "logged_in", False):
+                    if b.cfg.tg_admin_id and user and user.id != b.cfg.tg_admin_id:
+                        return None
+                    return b
+            b = matching_chat[0]
+            if b.cfg.tg_admin_id and user and user.id != b.cfg.tg_admin_id:
+                return None
+            return b
         if chat.type == "private" and user:
             for b in self.bridges:
                 if b.cfg.tg_admin_id and user.id == b.cfg.tg_admin_id:

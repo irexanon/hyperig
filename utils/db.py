@@ -25,6 +25,20 @@ class Store:
         raise NotImplementedError
 
 
+class ScopedStore(Store):
+    """Namespaces keys inside a parent user Store so one user DB can hold multiple Instagram accounts."""
+
+    def __init__(self, parent: Store, prefix: str):
+        self.parent = parent
+        self.prefix = prefix
+
+    async def get(self, key: str, default: Any = None) -> Any:
+        return await self.parent.get(f"{self.prefix}{key}", default)
+
+    async def set(self, key: str, value: Any) -> None:
+        await self.parent.set(f"{self.prefix}{key}", value)
+
+
 class FileStore(Store):
     def __init__(self, directory: Path):
         self.dir = Path(directory)
