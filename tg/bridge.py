@@ -148,12 +148,25 @@ class _TokenHub:
                 pass
 
     # ------------------------------------------------- workspace & bridge lookup
+    # A bot belongs to the logins that use its token. The platform's default bot (TELEGRAM_BOT_TOKEN) serves every
+    # login that has no bot of its own and lets new people register. A bot someone configured for their own login
+    # serves only that login: nobody else can sign in to it, register on it, or use it.
+    def _is_default_bot(self) -> bool:
+        mgr = self._manager
+        return bool(mgr and mgr.base_cfg.tg_token and mgr.base_cfg.tg_token == self.token)
+
+    def _serves(self, ws) -> bool:
+        mgr = self._manager
+        if not mgr:
+            return False
+        return ((ws.tg_token or mgr.base_cfg.tg_token or "").strip()) == self.token
+
     def _find_workspace_for_user(self, tg_user_id: int):
         mgr = self._manager
         if not mgr:
             return None
         for ws in mgr.workspaces.values():
-            if ws.tg_admin_id and ws.tg_admin_id == tg_user_id:
+            if ws.tg_admin_id and ws.tg_admin_id == tg_user_id and self._serves(ws):
                 return ws
         return None
 
@@ -245,13 +258,12 @@ class _TokenHub:
             "<b>Hyper Insta Bridge</b>\n"
             "Sign in, or create a new login."
         )
-        rows = [
-            [
-                InlineKeyboardButton("🔑 Login", callback_data="auth:login"),
-                InlineKeyboardButton("🆕 Register", callback_data="auth:register"),
-            ]
-        ]
-        return text, InlineKeyboardMarkup(rows)
+        buttons = [InlineKeyboardButton("Login", callback_data="auth:login")]
+        if self._is_default_bot():
+            buttons.append(InlineKeyboardButton("Register", callback_data="auth:register"))
+        else:
+            text += "\n\nThis is a private bot. Sign in with the login it belongs to."
+        return text, InlineKeyboardMarkup([buttons])
 
     def _view_home(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup | None]:
         """/start: what this bot is. The current state lives in /status."""
@@ -534,6 +546,10 @@ class _TokenHub:
                 return
 
             mode = "register" if data == "auth:register" else "login"
+            if mode == "register" and not self._is_default_bot():
+                text, markup = self._view_welcome("Registration is not available on this bot.")
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
             self._chat_state[user_id] = {"step": "ws_user", "mode": mode}
             title = "🆕 <b>Create Login</b>" if mode == "register" else "🔑 <b>Login</b>"
             await self._show_panel(
@@ -832,6 +848,11 @@ class _TokenHub:
     ) -> None:
         mgr = self._manager
         if mode == "register":
+            if not self._is_default_bot():
+                self._chat_state.pop(user_id, None)
+                text, markup = self._view_welcome("Registration is not available on this bot.")
+                await self._show_panel(chat_id, user_id, text, markup)
+                return
             if mgr.workspace_exists(uname):
                 self._chat_state.pop(user_id, None)
                 text, markup = self._view_welcome(f"❌ <b>{uname}</b> already exists. Tap <b>Login</b>.")
@@ -847,6 +868,8 @@ class _TokenHub:
             await self._show_panel(chat_id, user_id, text, markup)
         else:
             ws, err = await mgr.authenticate_workspace(uname, password)
+            if ws and not self._serves(ws):
+                ws, err = None, "That login does not belong to this bot."
             if not ws:
                 self._chat_state.pop(user_id, None)
                 text, markup = self._view_welcome(f"🔒 {err}")
@@ -888,7 +911,8 @@ class _TokenHub:
                 v_txt, markup = self._view_welcome(f"❌ <b>{uname}</b> already exists. Tap <b>Login</b>.")
                 await self._show_panel(chat_id, user_id, v_txt, markup)
                 return
-            if mode == "login" and not mgr.workspace_exists(uname):
+            other = mgr.workspaces.get(uname)
+            if mode == "login" and not (mgr.workspace_exists(uname) and (other is None or self._serves(other))):
                 self._chat_state.pop(user_id, None)
                 v_txt, markup = self._view_welcome(f"❌ <b>{uname}</b> not found. Tap <b>Register</b>.")
                 await self._show_panel(chat_id, user_id, v_txt, markup)
