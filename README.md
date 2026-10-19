@@ -96,20 +96,23 @@ comment on elsewhere, online status and activity-time patterns are not exposed a
 
 ## Settings
 
-`/settings` shows horizontal buttons: **Accounts**, **Bridge**, **Watchlist**, **Features**, **Downloads**.
+`/settings` opens with a summary of what is currently applied (accounts, bridge, watchlist pace and alert
+options, switched-off features), then horizontal buttons: **Accounts**, **Bridge**, **Watchlist**, **Features**.
 
 - **Accounts**: the Instagram accounts. Each account screen has login/relogin, Realtime and FBNS switches,
   session download, Logout and Remove (both ask for confirmation).
 - **Bridge**: DM bridge on/off, which account is bridged, the forum group.
-- **Watchlist**: the watched accounts (tap one for its own options) plus everything about alerts: pace
-  (safe / normal / fast), where alerts go, instant or daily digest, quiet hours, pause all, check now.
+- **Watchlist**: the watched accounts (tap one to choose what to watch on it, its interval, filters, pause),
+  Add account, Check now, Pause all. **Alert settings** has four buttons that each switch to their next value:
+  speed (safe / normal / fast), send to (this chat / forum group), delivery (instant / daily digest) and
+  quiet hours, with a line explaining each.
 - **Features**: switch the profile tools, link downloader and watcher on or off.
-- **Downloads**: largest file, audio button.
 
-Saved per Instagram account. `/start` is a short intro, `/status` shows the current state (account, bridge,
-group, topics, realtime, watcher health and recent errors). The bot does not delete its own messages; only
-the password / secret / cookie you type while logging in is removed from the chat. Downloads and dumps show
-one plain progress message that updates in place and stays as the result.
+Downloads always send the largest file Telegram bots allow (50 MB); a bigger file is reported, not sent.
+Settings are saved per Instagram account. `/start` is a short intro, `/status` shows the current state
+(account, bridge, group, topics, realtime, watcher health and recent errors). The bot does not delete its own
+messages; only the password / secret / cookie you type while logging in is removed from the chat. Downloads
+and dumps show one plain progress message that updates in place and stays as the result.
 
 ## Instagram link downloader
 

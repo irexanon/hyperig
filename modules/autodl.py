@@ -20,6 +20,8 @@ from utils.logger import get_logger
 from utils.progress import Progress
 from utils.tgsend import send_one
 
+TELEGRAM_MAX_BYTES = 50 * 1024 * 1024
+
 log = get_logger("autodl")
 
 _ALLOWED_HOSTS = {"instagram.com", "www.instagram.com", "m.instagram.com", "instagr.am", "www.instagr.am"}
@@ -343,6 +345,11 @@ class AutoDownloadModule(BaseModule):
     async def _send_paths(self, bot, chat_id: int, paths: list[Path], caption: str) -> int:
         if not paths:
             raise RuntimeError("Instagram returned no downloadable media files.")
+        too_big = [p for p in paths if p.stat().st_size > TELEGRAM_MAX_BYTES]
+        paths = [p for p in paths if p.stat().st_size <= TELEGRAM_MAX_BYTES]
+        if not paths:
+            mb = max(p.stat().st_size for p in too_big) / 1_000_000
+            raise RuntimeError(f"The file is {mb:.0f} MB. Telegram bots can send at most 50 MB.")
         sent = 0
         # Telegram media groups accept up to 10 photo/video items per message.
         for offset in range(0, len(paths), 10):

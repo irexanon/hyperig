@@ -747,24 +747,21 @@ class WatcherModule(BaseModule):
         return InlineKeyboardButton(f"[{label}]" if current else label, callback_data=data)
 
     def list_view(self, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        interval, _gap = self._pace()
-        pace, to, digest = self._pref("pace"), self._pref("alerts_to"), self._pref("digest")
-        mode = f"daily digest at {int(self._pref('digest_hour')):02d}:00" if digest == "daily" else "instant"
-        lines = [f"<b>Watchlist</b>  {len(self._watch)}/{MAX_WATCH}", ""]
+        """The accounts being watched. Alert options are one tap away on the Alert settings screen."""
+        lines = [f"<b>Watchlist</b>  {len(self._watch)} of {MAX_WATCH}", ""]
         if notice:
             lines = [notice, ""] + lines
         if not self._watch:
-            lines.append("Nothing watched yet. Tap Add account, or send /watch username.")
+            lines.append("No accounts yet. Tap Add account, or send /watch username.")
+        else:
+            lines.append("Tap an account to choose what to watch on it.")
+            lines.append("")
         for user, entry in self._watch.items():
             lines.append(f"@{esc(user)}: {summary(entry)}" + (" (paused)" if entry["paused"] else ""))
-        lines += [
-            "",
-            f"Pace: {pace} (about every {interval // 60} min), last pass {_ago(self._last_check)}",
-            f"Alerts to: {'forum group' if to == 'group' else 'this chat'}",
-            f"Mode: {mode}" + (", quiet hours on" if self._pref("quiet") else ""),
-        ]
+        if self._watch:
+            lines += ["", f"Last check: {_ago(self._last_check)}"]
         if time.time() < self._paused_until:
-            lines.append("Paused after an Instagram rate limit; resumes on its own.")
+            lines.append("Paused after an Instagram rate limit; it resumes on its own.")
         rows = self._row([InlineKeyboardButton(f"@{u}"[:24], callback_data=f"m:{PREFIX}:ac:{u}") for u in self._watch])
         all_paused = bool(self._watch) and all(e["paused"] for e in self._watch.values())
         rows.append([
@@ -772,35 +769,45 @@ class WatcherModule(BaseModule):
             InlineKeyboardButton("Check now", callback_data=f"m:{PREFIX}:now:-"),
             InlineKeyboardButton("Resume all" if all_paused else "Pause all", callback_data=f"m:{PREFIX}:pa:-"),
         ])
-        rows.append([self._opt(p.title(), p == pace, f"m:{PREFIX}:cfg:pace:{p}") for p in PACES])
-        rows.append([self._opt("This chat", to != "group", f"m:{PREFIX}:cfg:to:dm"),
-                     self._opt("Group", to == "group", f"m:{PREFIX}:cfg:to:group"),
-                     self._opt("Instant", digest != "daily", f"m:{PREFIX}:cfg:dg:instant"),
-                     self._opt("Daily digest", digest == "daily", f"m:{PREFIX}:cfg:dg:daily")])
-        rows.append([InlineKeyboardButton("Quiet hours and digest time", callback_data=f"m:{PREFIX}:al:-"),
+        rows.append([InlineKeyboardButton("Alert settings", callback_data=f"m:{PREFIX}:al:-"),
                      InlineKeyboardButton("Back", callback_data="nav:settings")])
         return "\n".join(lines), InlineKeyboardMarkup(rows)
 
     def alerts_view(self) -> tuple[str, InlineKeyboardMarkup]:
+        """Every option is one button that switches to its next value; the text says what it does."""
+        pace, to, digest = self._pref("pace"), self._pref("alerts_to"), self._pref("digest")
         quiet = bool(self._pref("quiet"))
         qs, qe, dh = int(self._pref("quiet_start")), int(self._pref("quiet_end")), int(self._pref("digest_hour"))
         tz = self.ctx.prefs.tz_hours(self.ctx.cfg) if getattr(self.ctx, "prefs", None) else 0
         text = (
-            "<b>Alert timing</b>\n\n"
-            f"Quiet hours: {'on' if quiet else 'off'}, {qs:02d}:00 to {qe:02d}:00. Alerts are held and sent afterwards as one message.\n"
-            f"Daily digest time: {dh:02d}:00\n"
-            f"Timezone: UTC{tz:+g}"
+            "<b>Alert settings</b>\n"
+            "Tap a button to switch it to its next value.\n\n"
+            f"Speed: <b>{pace}</b>. Each account is checked about every {PACES[pace][0] // 60} minutes. "
+            "Safe is gentler on your Instagram login, fast notices things sooner but risks rate limits.\n\n"
+            f"Send to: <b>{'forum group' if to == 'group' else 'this chat'}</b>. Where alerts arrive.\n\n"
+            f"Delivery: <b>{'daily digest' if digest == 'daily' else 'instant'}</b>. "
+            + (f"One summary every day at {dh:02d}:00." if digest == "daily" else "Each alert is sent when it happens.")
+            + "\n\n"
+            f"Quiet hours: <b>{'on' if quiet else 'off'}</b>. "
+            + (f"No alerts from {qs:02d}:00 to {qe:02d}:00; they are sent together afterwards." if quiet else "Alerts are sent at any hour.")
+            + f"\n\nTimes are UTC{tz:+g}."
         )
+        order = list(PACES)
         rows = [
-            [self._opt("Quiet on", quiet, f"m:{PREFIX}:aq:1"), self._opt("Quiet off", not quiet, f"m:{PREFIX}:aq:0")],
-            [InlineKeyboardButton("Start -1h", callback_data=f"m:{PREFIX}:aqs:-1"),
-             InlineKeyboardButton("Start +1h", callback_data=f"m:{PREFIX}:aqs:1"),
-             InlineKeyboardButton("End -1h", callback_data=f"m:{PREFIX}:aqe:-1"),
-             InlineKeyboardButton("End +1h", callback_data=f"m:{PREFIX}:aqe:1")],
-            [InlineKeyboardButton("Digest -1h", callback_data=f"m:{PREFIX}:adh:-1"),
-             InlineKeyboardButton("Digest +1h", callback_data=f"m:{PREFIX}:adh:1"),
-             InlineKeyboardButton("Back", callback_data=f"m:{PREFIX}:ls:-")],
+            [InlineKeyboardButton(f"Speed: {pace}", callback_data=f"m:{PREFIX}:cy:pace"),
+             InlineKeyboardButton(f"Send to: {'group' if to == 'group' else 'this chat'}", callback_data=f"m:{PREFIX}:cy:to")],
+            [InlineKeyboardButton(f"Delivery: {'daily digest' if digest == 'daily' else 'instant'}", callback_data=f"m:{PREFIX}:cy:dg"),
+             InlineKeyboardButton(f"Quiet hours: {'on' if quiet else 'off'}", callback_data=f"m:{PREFIX}:cy:q")],
         ]
+        extra = []
+        if quiet:
+            extra += [InlineKeyboardButton(f"Quiet from {qs:02d}:00 (+1h)", callback_data=f"m:{PREFIX}:cy:qs"),
+                      InlineKeyboardButton(f"Quiet until {qe:02d}:00 (+1h)", callback_data=f"m:{PREFIX}:cy:qe")]
+        if digest == "daily":
+            extra.append(InlineKeyboardButton(f"Digest at {dh:02d}:00 (+1h)", callback_data=f"m:{PREFIX}:cy:dh"))
+        if extra:
+            rows.append(extra)
+        rows.append([InlineKeyboardButton("Back", callback_data=f"m:{PREFIX}:ls:-")])
         return text, InlineKeyboardMarkup(rows)
 
     def _account_view(self, username: str) -> tuple[str, InlineKeyboardMarkup]:
@@ -867,19 +874,19 @@ class WatcherModule(BaseModule):
                 await self._save()
             await self._show(query, *self.list_view())
             return
-        if act == "cfg" and prefs:
-            key, _, value = arg.partition(":")
-            real = {"pace": "pace", "to": "alerts_to", "dg": "digest"}.get(key)
-            if real:
-                await prefs.set(real, value)
-            await self._show(query, *self.list_view())
-            return
-        if act in ("aq", "aqs", "aqe", "adh") and prefs:
-            if act == "aq":
-                await prefs.set("quiet", arg == "1")
-            else:
-                key = {"aqs": "quiet_start", "aqe": "quiet_end", "adh": "digest_hour"}[act]
-                await prefs.set(key, (int(prefs.get(key)) + int(arg)) % 24)
+        if act == "cy" and prefs:
+            if arg == "pace":
+                order = list(PACES)
+                await prefs.set("pace", order[(order.index(prefs.get("pace")) + 1) % len(order)])
+            elif arg == "to":
+                await prefs.set("alerts_to", "dm" if prefs.get("alerts_to") == "group" else "group")
+            elif arg == "dg":
+                await prefs.set("digest", "instant" if prefs.get("digest") == "daily" else "daily")
+            elif arg == "q":
+                await prefs.set("quiet", not prefs.get("quiet"))
+            elif arg in ("qs", "qe", "dh"):
+                key = {"qs": "quiet_start", "qe": "quiet_end", "dh": "digest_hour"}[arg]
+                await prefs.set(key, (int(prefs.get(key)) + 1) % 24)
             await self._show(query, *self.alerts_view())
             return
         if act == "t":  # t:<code>:<user>

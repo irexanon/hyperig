@@ -401,23 +401,41 @@ class _TokenHub:
         return "\n".join(lines), markup
 
     def _view_settings(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        """Settings home: what is currently applied, with one button per area."""
+        slot = ws.get_attached_slot() or ws.get_active_slot()
         head = f"{notice}\n\n" if notice else ""
-        text = (
-            f"{head}<b>Settings</b>\n\n"
-            f"Accounts: {len(ws.slots)} Instagram account(s)\n"
-            "Bridge: DM bridge, bridged account, forum group\n"
-            "Watchlist: accounts to watch and how alerts behave\n"
-            "Features: switch tools on or off\n"
-            "Downloads: file size limit, audio button"
-        )
+        enabled = bool(getattr(ws, "bridge_enabled", True))
+        lines = [
+            "<b>Settings</b>",
+            "",
+            f"Accounts: {len(ws.slots)} Instagram account(s)" + (f", bridged: @{slot.ig_username}" if slot else ""),
+            f"DM bridge: {'enabled' if enabled else 'paused'}, forum group {'linked' if ws.tg_chat_id else 'not linked'}",
+        ]
+        if slot:
+            prefs = slot.ctx.prefs
+            watcher = slot.modules.get("watcher")
+            if watcher is not None and slot.modules.is_enabled(watcher):
+                h = watcher.health()
+                pace = prefs.get("pace")
+                dest = "forum group" if prefs.get("alerts_to") == "group" else "this chat"
+                mode = f"daily digest at {int(prefs.get('digest_hour')):02d}:00" if prefs.get("digest") == "daily" else "instant"
+                quiet = f", quiet {int(prefs.get('quiet_start')):02d}:00 to {int(prefs.get('quiet_end')):02d}:00" if prefs.get("quiet") else ""
+                lines.append(f"Watchlist: {h['accounts']} account(s), {pace} pace, alerts to {dest}, {mode}{quiet}")
+            else:
+                lines.append("Watchlist: off")
+            off = [m.name for m in slot.modules.modules if getattr(m, "toggleable", False) and not prefs.feature_on(m.name)]
+            lines.append("Features: all on" if not off else "Features: off: " + ", ".join(off))
+        lines += [
+            "",
+            "Downloads send the largest file Telegram bots allow (50 MB).",
+        ]
         rows = [
             [InlineKeyboardButton("Accounts", callback_data="nav:accounts"),
              InlineKeyboardButton("Bridge", callback_data="nav:bridge"),
              InlineKeyboardButton("Watchlist", callback_data="nav:watch")],
-            [InlineKeyboardButton("Features", callback_data="pn:ft"),
-             InlineKeyboardButton("Downloads", callback_data="pn:dl")],
+            [InlineKeyboardButton("Features", callback_data="pn:ft")],
         ]
-        return text, InlineKeyboardMarkup(rows)
+        return head + "\n".join(lines), InlineKeyboardMarkup(rows)
 
     def _view_bridge(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         slot = ws.get_attached_slot() or ws.get_active_slot()

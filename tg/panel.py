@@ -1,8 +1,6 @@
-"""Settings sub-screens for Features and Downloads (callback prefix "pn:").
+"""Settings sub-screen for Features (callback prefix "pn:").
 Watcher alerts, pace and quiet hours live on the Watchlist screen (modules/watcher.py)."""
 from telegram import InlineKeyboardButton as Btn, InlineKeyboardMarkup as Markup
-
-SIZES = (10, 20, 35, 50)
 
 
 def _back():
@@ -18,12 +16,6 @@ def view_for(ws, name: str, notice: str = ""):
     if not slot:
         return "Add and log in to an Instagram account first.", Markup([_back()])
     prefs, head = slot.ctx.prefs, (f"{notice}\n\n" if notice else "")
-    if name == "dl":
-        mb, audio = slot.cfg.max_media_mb, prefs.get("dl_audio")
-        rows = [[Btn(f"[{s} MB]" if s == mb else f"{s} MB", callback_data=f"pn:mb:{s}") for s in SIZES],
-                [Btn(f"Audio button: {'on' if audio else 'off'}", callback_data="pn:audio"), *_back()]]
-        return (f"{head}<b>Downloads</b>\n\nLargest file: <b>{mb} MB</b> (Telegram bots allow up to 50)\n"
-                f"Audio button under reels: <b>{'on' if audio else 'off'}</b>"), Markup(rows)
     # features
     lines, buttons = [], []
     for m in slot.modules.modules:
@@ -45,12 +37,4 @@ async def handle(ws, data: str):
     prefs, view = slot.ctx.prefs, "ft"
     if act == "ft" and arg:
         await prefs.set_feature(arg, not prefs.feature_on(arg))
-    elif act == "dl":
-        view = "dl"
-    elif act == "mb":
-        await slot.apply_config({"max_media_mb": int(arg)})
-        view = "dl"
-    elif act == "audio":
-        await prefs.set("dl_audio", not prefs.get("dl_audio"))
-        view = "dl"
     return view_for(ws, view)
