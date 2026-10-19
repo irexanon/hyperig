@@ -120,8 +120,8 @@ def test_everything():
         await w._check_all()
         assert "new highlight" in "\n".join(bot.log)
 
-        # filters, pause, switch off
-        await w.update_entry("nasa", keywords=["trip"], paused=True)
+        # pause, switch off
+        await w.update_entry("nasa", paused=True)
         cl.posts.append(post(10, "nothing", mins=60))
         before = len(bot.log)
         await w._check_all()

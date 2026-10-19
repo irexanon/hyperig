@@ -80,6 +80,11 @@ def test_panel_and_watchlist():
         assert all(w._watch["nasa"][k] for k, _n, _s in __import__("modules.watcher", fromlist=["FLAGS"]).FLAGS.values())
         assert "Watching: posts, stories, profile, highlights, edits, milestones" in Q.shown[-1]
         await w.on_button("ls:-", q, None)
+        assert "sent to: this chat" in Q.shown[-1]
+        await w.on_button("to:-", q, None)
+        assert ctx.prefs.get("alerts_to") == "group" and "sent to: the forum group" in Q.shown[-1]
+        cbs = callbacks(w._account_view("nasa")[1])
+        assert not any(":kw:" in c or ":on:" in c or ":iv:" in c for c in cbs) and "m:watch:ev:nasa" in cbs
         await w.on_button("pa:-", q, None)
         assert w._watch["nasa"]["paused"]
         await w.on_button("pa:-", q, None)

@@ -15,6 +15,7 @@ PACES = ("safe", "normal", "fast")
 DEFAULTS: dict[str, Any] = {
     "features": {},          # module name -> bool; a missing name means ON
     "pace": "normal",        # safe | normal | fast: how gently the watcher talks to Instagram (no screen; default is fine)
+    "alerts_to": "dm",       # dm | group: where watcher alerts go (this chat, or the forum group)
     "dl_audio": True,        # offer "download original audio" under downloaded Reels
 }
 

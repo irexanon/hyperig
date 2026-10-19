@@ -84,8 +84,8 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 **Watcher** (`modules/watcher.py`): up to 10 public accounts, each on its own schedule with jitter and a pause
 between accounts. Per account you can switch on: new posts/reels, stories, profile changes (name, bio, link,
 category, verified badge, picture), highlights (new ones, new items), edits and removals (caption edits, posts
-that disappeared), and milestones (likes/comments on recent posts, follower counts). Filters: only posts or only
-reels, caption keywords. Per account: pause, own interval. What exists when you add an account or switch a
+that disappeared), and milestones (likes/comments on recent posts, follower counts). Per account you can pause it or switch each of these on and off.
+What exists when you add an account or switch a
 feature on is recorded silently, so you only get what happens afterwards. Seen items are saved, so restarts
 never repeat or lose anything. A rate limit pauses all checks for 15 minutes and tells you once; an account that
 turns private is removed. Alerts arrive in your chat with the bot as soon as something is captured.
@@ -101,8 +101,8 @@ comment on elsewhere, online status and activity-time patterns are not exposed a
   session download, Logout and Remove (both ask for confirmation).
 - **Bridge**: DM bridge on/off, which account is bridged, the forum group.
 - **Watchlist**: the watched accounts, with Add account, Check now and Pause all. Tap an account to switch what
-  to watch on it (posts, stories, profile, highlights, edits, engagement, or Everything), its check interval,
-  filters and pause. Alerts are sent to your chat with the bot as soon as something is captured.
+  to watch on it (posts, stories, profile, highlights, edits, engagement, or Everything) or pause it. Alerts are
+  sent as soon as something is captured, to your chat with the bot or to the forum group (the Alerts to button).
 - **Features**: switch the profile tools, link downloader and watcher on or off.
 
 Downloads always send the largest file Telegram bots allow (50 MB); a bigger file is reported, not sent.

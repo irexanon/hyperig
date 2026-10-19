@@ -413,7 +413,8 @@ class _TokenHub:
             prefs = slot.ctx.prefs
             watcher = slot.modules.get("watcher")
             if watcher is not None and slot.modules.is_enabled(watcher):
-                lines.append(f"Watchlist: {watcher.health()['accounts']} account(s), alerts to this chat as they happen")
+                dest = "forum group" if prefs.get("alerts_to") == "group" else "this chat"
+                lines.append(f"Watchlist: {watcher.health()['accounts']} account(s), alerts to {dest} as they happen")
             else:
                 lines.append("Watchlist: off")
             off = [m.name for m in slot.modules.modules if getattr(m, "toggleable", False) and not prefs.feature_on(m.name)]
