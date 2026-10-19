@@ -24,6 +24,7 @@ from core.auth import describe_error
 from modules.base import BaseModule, Command
 from utils import media as media_utils
 from utils.logger import get_logger
+from utils.progress import Progress
 from utils.tgsend import caption_of, clip as _clip, esc as _esc, items_of, num as _num, send_items, send_one
 
 log = get_logger("dump")
@@ -101,25 +102,25 @@ class DumpModule(BaseModule):
     async def _public_profile(self, username: str):
         user = await self._profile(username)
         if user.is_private:
-            raise PermissionError("🔒 That account is private. I only work with public accounts.")
+            raise PermissionError("That account is private. I only work with public accounts.")
         return user
 
     def _explain(self, e: Exception) -> str:
         if isinstance(e, PermissionError):
             return str(e)
         if isinstance(e, RuntimeError):
-            return f"❌ {e}"
+            return f"{e}"
         try:
             from instagrapi import exceptions as ig_exc
 
             if isinstance(e, (ig_exc.UserNotFound, ig_exc.ClientNotFoundError)):
-                return "❌ That account was not found."
+                return "That account was not found."
             if isinstance(e, ig_exc.PrivateAccount):
-                return "🔒 That account is private. I only work with public accounts."
+                return "That account is private. I only work with public accounts."
             info = describe_error(e, self.ctx.ig.cl)
-            return f"❌ {info.text}"
+            return f"{info.text}"
         except Exception:
-            return f"❌ {type(e).__name__}: {e}"
+            return f"{type(e).__name__}: {e}"
 
     # ------------------------------------------------------------------ text builders
     @staticmethod
@@ -149,16 +150,11 @@ class DumpModule(BaseModule):
     def _menu(username: str, private: bool) -> InlineKeyboardMarkup:
         rows = []
         if not private:
-            rows.append([_btn("📸 Posts", "pm", username), _btn("🎬 Reels", "rm", username)])
-            rows.append([_btn("📖 Stories", "st", username), _btn("⭐ Highlights", "hl", username)])
-            rows.append([_btn("👥 Followers / Following", "lm", username)])
-        rows.append([_btn("📄 JSON", "js", username)])
-        rows.append(
-            [
-                InlineKeyboardButton("🔗 Instagram", url=f"https://www.instagram.com/{username}/"),
-                _btn("✖ Close", "x", "-"),
-            ]
-        )
+            rows.append([_btn("Posts", "pm", username), _btn("Reels", "rm", username)])
+            rows.append([_btn("Stories", "st", username), _btn("Highlights", "hl", username)])
+            rows.append([_btn("Followers / Following", "lm", username)])
+        rows.append([_btn("JSON", "js", username)])
+        rows.append([InlineKeyboardButton("Open on Instagram", url=f"https://www.instagram.com/{username}/")])
         return InlineKeyboardMarkup(rows)
 
     @staticmethod
@@ -166,17 +162,17 @@ class DumpModule(BaseModule):
         counts = (5, 10, 20, POSTS_MAX) if kind == "p" else (3, 5, 10, REELS_MAX)
         row = [_btn(f"{n}", f"{kind}{n}", username) for n in counts]
         label = "posts" if kind == "p" else "reels"
-        return InlineKeyboardMarkup([row, [_btn("✏️ Type a number", "cu", f"{kind}:{username}")],
-                                     [_btn(f"⬅️ Back (how many {label}?)", "bk", username)]])
+        return InlineKeyboardMarkup([row, [_btn("Type a number", "cu", f"{kind}:{username}")],
+                                     [_btn(f"Back (how many {label}?)", "bk", username)]])
 
     def _list_menu(self, chat_id: int, username: str) -> InlineKeyboardMarkup:
         fmt = self._fmt.get(chat_id, "txt")
         rows = []
-        for kind, label in (("f", "👥 Followers"), ("g", "➡️ Following")):
+        for kind, label in (("f", "Followers"), ("g", "Following")):
             rows.append([_btn(f"{label} {n}", f"l{kind}{n}", username) for n in (100, 500, 1000)])
-            rows.append([_btn(f"✏️ {label.split(' ', 1)[1]}: type a number", "cu", f"l{kind}:{username}")])
+            rows.append([_btn(f"{label}: type a number", "cu", f"l{kind}:{username}")])
         rows.append([_btn(f"File format: {fmt.upper()} (tap to switch)", "ft", username)])
-        rows.append([_btn("⬅️ Back", "bk", username)])
+        rows.append([_btn("Back", "bk", username)])
         return InlineKeyboardMarkup(rows)
 
     # ------------------------------------------------------------------ telegram helpers
@@ -209,26 +205,29 @@ class DumpModule(BaseModule):
         }
 
     # ------------------------------------------------------------------ the jobs
+    TITLES = {"p": "Downloading posts", "r": "Downloading reels", "st": "Downloading stories", "h": "Downloading highlight",
+              "pp": "Fetching profile picture", "js": "Exporting profile", "lf": "Collecting followers", "lg": "Collecting following"}
+
     async def _run(self, bot, chat_id: int, act: str, username: str, n: int = 0, hl_pk: str = "") -> None:
         """Run one action. Never raises: problems are reported in the chat."""
         if act == "hl":  # just a list of buttons, no downloading
             await self._show_highlights(bot, chat_id, username)
             return
         if chat_id in self._busy:
-            await bot.send_message(chat_id, "⏳ Another dump is still running. Wait for it to finish.")
+            await bot.send_message(chat_id, "Another job is still running here. Wait for it to finish.")
             return
         self._busy.add(chat_id)
-        status = await bot.send_message(chat_id, f"⏳ Working on @{username}…")
+        status = await Progress.begin(bot, chat_id, self.TITLES.get(act, "Working"), f"@{username}", "Reading profile")
         try:
             sent, total = await self._job(bot, chat_id, status, act, username, n, hl_pk)
             if total:
-                await self._edit(status, f"✅ Sent {sent} of {total} for @{username}" + ("" if sent == total else " (some files could not be downloaded)"))
+                await status.done(f"Sent {sent} of {total} from @{username}" + ("" if sent == total else " (some files could not be downloaded)"))
             else:
-                await self._edit(status, f"✅ Done for @{username}")
+                await status.done(f"@{username}")
         except Exception as e:
             if not isinstance(e, (PermissionError, RuntimeError)):
                 log.warning("Dump %s for @%s failed: %s", act, username, e)
-            await self._edit(status, _esc(self._explain(e)))
+            await status.fail(self._explain(e))
         finally:
             self._busy.discard(chat_id)
 
@@ -303,7 +302,7 @@ class DumpModule(BaseModule):
         n = max(1, min(n or LIST_DEFAULT, LIST_MAX))
         word = "followers" if followers else "following"
         total = user.follower_count if followers else user.following_count
-        await self._edit(status, f"⏳ Collecting up to {n} {word} of @{_esc(user.username)}… large lists take a few minutes.")
+        await status.set(f"Collecting up to {n}. Large lists take a few minutes.", None)
         pk = str(user.pk)
         cl = self.ctx.ig.cl
         found = await self._ig(lambda: (cl.user_followers(pk, amount=n) if followers else cl.user_following(pk, amount=n)))
@@ -326,11 +325,10 @@ class DumpModule(BaseModule):
     async def _send_many(self, bot, chat_id, status, medias, kind: str) -> tuple[int, int]:
         sent = 0
         for i, m in enumerate(medias, 1):
+            await status.set(f"Sending {i} of {len(medias)}", (i - 1) / len(medias))
             items = items_of(m)
             if items and await send_items(bot, chat_id, items, caption_of(m, kind), self._fetch):
                 sent += 1
-            if i % 2 == 0 and i != len(medias):
-                await self._edit(status, f"⏳ {i}/{len(medias)}…")
             if i != len(medias):
                 await asyncio.sleep(random.uniform(0.8, 1.8))  # gentle pace, for Instagram and Telegram
         return sent, len(medias)
@@ -348,7 +346,7 @@ class DumpModule(BaseModule):
         rows, row = [], []
         for h in highlights[:HIGHLIGHT_BUTTONS]:
             pk = str(h.pk).split(":")[-1]
-            row.append(_btn(f"⭐ {_clip(h.title or 'Highlight', 18)} ({h.media_count or '?'})", "h", f"{pk}:{username}"))
+            row.append(_btn(f"{_clip(h.title or 'Highlight', 18)} ({h.media_count or '?'})", "h", f"{pk}:{username}"))
             if len(row) == 2:
                 rows.append(row)
                 row = []
@@ -447,13 +445,6 @@ class DumpModule(BaseModule):
     async def on_button(self, rest: str, query, context) -> None:
         act, _, arg = rest.partition(":")
         bot, chat_id = context.bot, query.message.chat_id
-
-        if act == "x":
-            try:
-                await query.message.delete()
-            except TelegramError:
-                pass
-            return
 
         if act == "h":
             hl_pk, _, username = arg.partition(":")

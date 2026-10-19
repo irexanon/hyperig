@@ -17,6 +17,7 @@ from telegram.error import BadRequest, TelegramError
 from core.auth import describe_error
 from modules.base import BaseModule, Command
 from utils.logger import get_logger
+from utils.progress import Progress
 from utils.tgsend import send_one
 
 log = get_logger("autodl")
@@ -392,26 +393,26 @@ class AutoDownloadModule(BaseModule):
         message = update.effective_message
         chat_id = update.effective_chat.id
         if chat_id in self._busy:
-            await message.reply_text("⏳ Another download is still running in this chat. Please wait.")
+            await message.reply_text("Another download is still running in this chat. Please wait.")
             return
         self._busy.add(chat_id)
-        status = await message.reply_text("⏳ Detecting Instagram media and downloading the highest available resolution…")
+        status = await Progress.begin(update.get_bot(), chat_id, f"Downloading {category}" if category else "Downloading", url, "Reading link")
         try:
             with tempfile.TemporaryDirectory(prefix="hyperig-dl-") as temp:
                 folder = Path(temp)
+                await status.set("Fetching media from Instagram", 0.3)
                 result = await self._ig(lambda: self._download_sync(url, category, folder, audio=audio))
                 paths = result["paths"]
                 if not paths:
                     raise RuntimeError("Instagram returned no downloadable media files.")
                 caption = f"📥 <b>Instagram {html.escape(result['kind'].title())}</b>\n<a href=\"{html.escape(url, quote=True)}\">Open on Instagram</a>"
+                total_mb = sum(p.stat().st_size for p in paths) / 1_000_000
+                await status.set(f"Uploading {len(paths)} file(s), {total_mb:.1f} MB", 0.7)
                 sent = await self._send_paths(update.get_bot(), chat_id, paths, caption)
-                try:
-                    await status.edit_text(f"✅ Sent {sent} media file(s).")
-                except TelegramError:
-                    pass
+                await status.done(f"{result['kind'].title()}, {sent} file(s), {total_mb:.1f} MB")
                 if result["is_reel"] and not audio and self.ctx.prefs.get("dl_audio", True):
                     markup = InlineKeyboardMarkup(
-                        [[InlineKeyboardButton("🎵 Download original audio", callback_data=f"m:autodl:a:{result['pk']}")]]
+                        [[InlineKeyboardButton("Download original audio", callback_data=f"m:autodl:a:{result['pk']}")]]
                     )
                     await update.get_bot().send_message(
                         chat_id,
@@ -420,19 +421,16 @@ class AutoDownloadModule(BaseModule):
                     )
         except Exception as e:
             log.info("Instagram link download failed (%s)", type(e).__name__)
-            try:
-                await status.edit_text(html.escape(self._explain(e)), parse_mode="HTML")
-            except TelegramError:
-                await message.reply_text(self._explain(e))
+            await status.fail(self._explain(e))
         finally:
             self._busy.discard(chat_id)
 
     async def _download_audio_by_pk(self, bot, chat_id: int, media_pk: str) -> None:
         if chat_id in self._busy:
-            await bot.send_message(chat_id, "⏳ Another download is still running in this chat. Please wait.")
+            await bot.send_message(chat_id, "Another download is still running in this chat. Please wait.")
             return
         self._busy.add(chat_id)
-        status = await bot.send_message(chat_id, "⏳ Downloading the Reel's available original audio…")
+        status = await Progress.begin(bot, chat_id, "Downloading audio", f"Reel {media_pk}", "Fetching audio")
         try:
             with tempfile.TemporaryDirectory(prefix="hyperig-audio-") as temp:
                 folder = Path(temp)
@@ -447,25 +445,25 @@ class AutoDownloadModule(BaseModule):
                 if not paths:
                     raise RuntimeError("Instagram returned no audio file.")
                 sent = await self._send_paths(bot, chat_id, paths, f"🎵 Audio from Reel {media_pk}")
-                await status.edit_text(f"✅ Sent {sent} audio file(s).")
+                await status.done(f"{sent} audio file(s)")
         except Exception as e:
-            await status.edit_text(html.escape(self._explain(e)), parse_mode="HTML")
+            await status.fail(self._explain(e))
         finally:
             self._busy.discard(chat_id)
 
     def _explain(self, error: Exception) -> str:
         if isinstance(error, (RuntimeError, ValueError, PermissionError)):
-            return f"❌ {error}"
+            return f"{error}"
         try:
             from instagrapi import exceptions as ig_exc
             if isinstance(error, (ig_exc.UserNotFound, ig_exc.ClientNotFoundError)):
-                return "❌ That Instagram item or account was not found."
+                return "That Instagram item or account was not found."
             if isinstance(error, ig_exc.PrivateAccount):
                 return "🔒 This account or item is private or is not accessible to the logged-in account."
             info = describe_error(error, self.ctx.ig.cl)
-            return f"❌ {info.text}"
+            return f"{info.text}"
         except Exception:
-            return f"❌ {type(error).__name__}: {error}"
+            return f"{type(error).__name__}: {error}"
 
     async def cmd_dl(self, args, update):
         if not args:
@@ -474,7 +472,7 @@ class AutoDownloadModule(BaseModule):
         classified = classify_instagram_url(args[0])
         if not classified:
             await update.effective_message.reply_text(
-                "❌ Unsupported link. Send an Instagram Reel, post, Story, Highlight, or profile URL."
+                "Unsupported link. Send an Instagram Reel, post, Story, Highlight, or profile URL."
             )
             return
         category, url = classified

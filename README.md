@@ -96,16 +96,20 @@ comment on elsewhere, online status and activity-time patterns are not exposed a
 
 ## Settings
 
-`/settings` has three sections:
+`/settings` shows horizontal buttons: **Accounts**, **Bridge**, **Watchlist**, **Features**, **Downloads**.
 
-- **Manage Accounts**: the Instagram accounts. Each account screen has login/relogin, Realtime and FBNS switches,
+- **Accounts**: the Instagram accounts. Each account screen has login/relogin, Realtime and FBNS switches,
   session download, Logout and Remove (both ask for confirmation).
-- **Bridge Settings**: DM bridge on/off, which account is bridged, the forum group.
-- **Watch Settings**: Watchlist (what to watch), Features on/off (profile tools, link downloader, watcher),
-  Notifications (where alerts go, quiet hours, daily digest, timezone), Safety (watcher pace), Downloads (largest
-  file, audio button) and Health (login state, last watcher pass, recent errors). Saved per Instagram account.
+- **Bridge**: DM bridge on/off, which account is bridged, the forum group.
+- **Watchlist**: the watched accounts (tap one for its own options) plus everything about alerts: pace
+  (safe / normal / fast), where alerts go, instant or daily digest, quiet hours, pause all, check now.
+- **Features**: switch the profile tools, link downloader and watcher on or off.
+- **Downloads**: largest file, audio button.
 
-`/start` shows a plain status message with no buttons. `/logout` asks before signing out.
+Saved per Instagram account. `/start` is a short intro, `/status` shows the current state (account, bridge,
+group, topics, realtime, watcher health and recent errors). The bot does not delete its own messages; only
+the password / secret / cookie you type while logging in is removed from the chat. Downloads and dumps show
+one plain progress message that updates in place and stays as the result.
 
 ## Instagram link downloader
 

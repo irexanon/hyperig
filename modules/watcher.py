@@ -701,10 +701,10 @@ class WatcherModule(BaseModule):
             await message.reply_text("Usage: /unwatch <username>")
             return
         removed = await self.remove_account(username)
-        await message.reply_text(f"🛑 Stopped watching @{username}." if removed else f"@{username} is not on your watchlist.")
+        await message.reply_text(f"Stopped watching @{username}." if removed else f"@{username} is not on your watchlist.")
 
     async def cmd_watchlist(self, args, update):
-        text, markup = self._list_view()
+        text, markup = self.list_view()
         await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
 
     # ------------------------------------------------------------------ typing flows (add account, keywords)
@@ -738,68 +738,101 @@ class WatcherModule(BaseModule):
         return True
 
     # ------------------------------------------------------------------ screens
-    def _list_view(self) -> tuple[str, InlineKeyboardMarkup]:
+    @staticmethod
+    def _row(items, size: int = 3) -> list[list[InlineKeyboardButton]]:
+        return [items[i:i + size] for i in range(0, len(items), size)]
+
+    @staticmethod
+    def _opt(label: str, current: bool, data: str) -> InlineKeyboardButton:
+        return InlineKeyboardButton(f"[{label}]" if current else label, callback_data=data)
+
+    def list_view(self, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         interval, _gap = self._pace()
-        lines = [f"👁 <b>Watchlist</b> · {len(self._watch)}/{MAX_WATCH} · checks about every {interval // 60} min · last pass {_ago(self._last_check)}"]
-        if time.time() < self._paused_until:
-            lines.append("⏸ <i>Paused after an Instagram rate limit; resumes on its own.</i>")
+        pace, to, digest = self._pref("pace"), self._pref("alerts_to"), self._pref("digest")
+        mode = f"daily digest at {int(self._pref('digest_hour')):02d}:00" if digest == "daily" else "instant"
+        lines = [f"<b>Watchlist</b>  {len(self._watch)}/{MAX_WATCH}", ""]
+        if notice:
+            lines = [notice, ""] + lines
         if not self._watch:
-            lines += ["", "Nothing watched yet. Tap ➕ Add account, or send /watch username."]
+            lines.append("Nothing watched yet. Tap Add account, or send /watch username.")
         for user, entry in self._watch.items():
-            lines.append(f"{'⏸' if entry['paused'] else '👁'} @{esc(user)} — {summary(entry)}")
-        rows, row = [], []
-        for user in self._watch:
-            row.append(InlineKeyboardButton(f"@{user}"[:30], callback_data=f"m:{PREFIX}:ac:{user}"))
-            if len(row) == 2:
-                rows.append(row)
-                row = []
-        if row:
-            rows.append(row)
-        rows.append(
-            [InlineKeyboardButton("➕ Add account", callback_data=f"m:{PREFIX}:add:-"),
-             InlineKeyboardButton("🔄 Check now", callback_data=f"m:{PREFIX}:now:-")]
-        )
-        rows.append(
-            [InlineKeyboardButton("⬅️ Watch Settings", callback_data="pn:home"),
-             InlineKeyboardButton("✖ Close", callback_data=f"m:{PREFIX}:x:-")]
-        )
+            lines.append(f"@{esc(user)}: {summary(entry)}" + (" (paused)" if entry["paused"] else ""))
+        lines += [
+            "",
+            f"Pace: {pace} (about every {interval // 60} min), last pass {_ago(self._last_check)}",
+            f"Alerts to: {'forum group' if to == 'group' else 'this chat'}",
+            f"Mode: {mode}" + (", quiet hours on" if self._pref("quiet") else ""),
+        ]
+        if time.time() < self._paused_until:
+            lines.append("Paused after an Instagram rate limit; resumes on its own.")
+        rows = self._row([InlineKeyboardButton(f"@{u}"[:24], callback_data=f"m:{PREFIX}:ac:{u}") for u in self._watch])
+        all_paused = bool(self._watch) and all(e["paused"] for e in self._watch.values())
+        rows.append([
+            InlineKeyboardButton("Add account", callback_data=f"m:{PREFIX}:add:-"),
+            InlineKeyboardButton("Check now", callback_data=f"m:{PREFIX}:now:-"),
+            InlineKeyboardButton("Resume all" if all_paused else "Pause all", callback_data=f"m:{PREFIX}:pa:-"),
+        ])
+        rows.append([self._opt(p.title(), p == pace, f"m:{PREFIX}:cfg:pace:{p}") for p in PACES])
+        rows.append([self._opt("This chat", to != "group", f"m:{PREFIX}:cfg:to:dm"),
+                     self._opt("Group", to == "group", f"m:{PREFIX}:cfg:to:group"),
+                     self._opt("Instant", digest != "daily", f"m:{PREFIX}:cfg:dg:instant"),
+                     self._opt("Daily digest", digest == "daily", f"m:{PREFIX}:cfg:dg:daily")])
+        rows.append([InlineKeyboardButton("Quiet hours and digest time", callback_data=f"m:{PREFIX}:al:-"),
+                     InlineKeyboardButton("Back", callback_data="nav:settings")])
         return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+    def alerts_view(self) -> tuple[str, InlineKeyboardMarkup]:
+        quiet = bool(self._pref("quiet"))
+        qs, qe, dh = int(self._pref("quiet_start")), int(self._pref("quiet_end")), int(self._pref("digest_hour"))
+        tz = self.ctx.prefs.tz_hours(self.ctx.cfg) if getattr(self.ctx, "prefs", None) else 0
+        text = (
+            "<b>Alert timing</b>\n\n"
+            f"Quiet hours: {'on' if quiet else 'off'}, {qs:02d}:00 to {qe:02d}:00. Alerts are held and sent afterwards as one message.\n"
+            f"Daily digest time: {dh:02d}:00\n"
+            f"Timezone: UTC{tz:+g}"
+        )
+        rows = [
+            [self._opt("Quiet on", quiet, f"m:{PREFIX}:aq:1"), self._opt("Quiet off", not quiet, f"m:{PREFIX}:aq:0")],
+            [InlineKeyboardButton("Start -1h", callback_data=f"m:{PREFIX}:aqs:-1"),
+             InlineKeyboardButton("Start +1h", callback_data=f"m:{PREFIX}:aqs:1"),
+             InlineKeyboardButton("End -1h", callback_data=f"m:{PREFIX}:aqe:-1"),
+             InlineKeyboardButton("End +1h", callback_data=f"m:{PREFIX}:aqe:1")],
+            [InlineKeyboardButton("Digest -1h", callback_data=f"m:{PREFIX}:adh:-1"),
+             InlineKeyboardButton("Digest +1h", callback_data=f"m:{PREFIX}:adh:1"),
+             InlineKeyboardButton("Back", callback_data=f"m:{PREFIX}:ls:-")],
+        ]
+        return text, InlineKeyboardMarkup(rows)
 
     def _account_view(self, username: str) -> tuple[str, InlineKeyboardMarkup]:
         entry = self._watch.get(username)
+        back = InlineKeyboardButton("Watchlist", callback_data=f"m:{PREFIX}:ls:-")
         if not entry:
-            return "That account is not on the watchlist.", InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅️ Watchlist", callback_data=f"m:{PREFIX}:ls:-")]]
-            )
+            return "That account is not on the watchlist.", InlineKeyboardMarkup([[back]])
         every = f"{entry['interval'] // 60} min" if entry["interval"] else f"default ({self._pace()[0] // 60} min)"
         words = ", ".join(entry["keywords"]) or "none"
         text = (
-            f"👁 <b>@{esc(username)}</b>{' · ⏸ paused' if entry['paused'] else ''}\n\n"
+            f"<b>@{esc(username)}</b>{' (paused)' if entry['paused'] else ''}\n\n"
             f"Watching: {summary(entry)}\n"
-            f"Check every: {every} · last check {_ago(entry['last'])}\n"
-            f"Alerts for: {entry['only']} · keywords: {esc(words)}\n\n"
-            "<i>Public information only. Turning a feature on starts from now.</i>"
+            f"Check every: {every}, last check {_ago(entry['last'])}\n"
+            f"Alerts for: {entry['only']}, keywords: {esc(words)}\n\n"
+            "Turning a feature on starts from now."
         )
-        rows, row = [], []
-        for code, (key, name, _short) in FLAGS.items():
-            row.append(InlineKeyboardButton(f"{'✅' if entry[key] else '☐'} {name}", callback_data=f"m:{PREFIX}:t:{code}:{username}"))
-            if len(row) == 2:
-                rows.append(row)
-                row = []
-        rows.append(row) if row else None
-        rows.append(
-            [InlineKeyboardButton(f"⏱ Every: {every.split(' (')[0]}", callback_data=f"m:{PREFIX}:iv:{username}"),
-             InlineKeyboardButton(f"🎯 Only: {entry['only']}", callback_data=f"m:{PREFIX}:on:{username}")]
-        )
-        rows.append(
-            [InlineKeyboardButton(f"🔤 Keywords ({len(entry['keywords'])})", callback_data=f"m:{PREFIX}:kw:{username}"),
-             InlineKeyboardButton("🧹 Clear keywords", callback_data=f"m:{PREFIX}:kx:{username}")]
-        )
-        rows.append(
-            [InlineKeyboardButton("▶️ Resume" if entry["paused"] else "⏸ Pause", callback_data=f"m:{PREFIX}:pz:{username}"),
-             InlineKeyboardButton("🗑 Remove", callback_data=f"m:{PREFIX}:rm:{username}")]
-        )
-        rows.append([InlineKeyboardButton("⬅️ Watchlist", callback_data=f"m:{PREFIX}:ls:-")])
+        toggles = [
+            InlineKeyboardButton(f"{name}: {'on' if entry[key] else 'off'}", callback_data=f"m:{PREFIX}:t:{code}:{username}")
+            for code, (key, name, _short) in FLAGS.items()
+        ]
+        rows = self._row(toggles, 2)
+        rows.append([
+            InlineKeyboardButton(f"Every: {every.split(' (')[0]}", callback_data=f"m:{PREFIX}:iv:{username}"),
+            InlineKeyboardButton(f"Only: {entry['only']}", callback_data=f"m:{PREFIX}:on:{username}"),
+            InlineKeyboardButton(f"Keywords ({len(entry['keywords'])})", callback_data=f"m:{PREFIX}:kw:{username}"),
+        ])
+        rows.append([
+            InlineKeyboardButton("Clear keywords", callback_data=f"m:{PREFIX}:kx:{username}"),
+            InlineKeyboardButton("Resume" if entry["paused"] else "Pause", callback_data=f"m:{PREFIX}:pz:{username}"),
+            InlineKeyboardButton("Remove", callback_data=f"m:{PREFIX}:rm:{username}"),
+        ])
+        rows.append([back])
         return text, InlineKeyboardMarkup(rows)
 
     async def _show(self, query, text: str, markup) -> None:
@@ -811,22 +844,43 @@ class WatcherModule(BaseModule):
     async def on_button(self, rest: str, query, context) -> None:
         act, _, arg = rest.partition(":")
         message = query.message
-        if act == "x":
-            try:
-                await message.delete()
-            except TelegramError:
-                pass
-            return
+        prefs = getattr(self.ctx, "prefs", None)
         if act == "ls":
-            await self._show(query, *self._list_view())
+            await self._show(query, *self.list_view())
+            return
+        if act == "al":
+            await self._show(query, *self.alerts_view())
             return
         if act == "add":
             self._awaiting[message.chat_id] = ("add", "")
-            await message.reply_text("Send the username to watch (like nasa or @nasa), or “cancel”.")
+            await message.reply_text("Send the username to watch (like nasa or @nasa), or send cancel.")
             return
         if act == "now":
             ok, text = self.request_check_now()
             await message.reply_text(text)
+            return
+        if act == "pa":
+            pause = not all(e["paused"] for e in self._watch.values())
+            for e in self._watch.values():
+                e["paused"] = pause
+            async with self._lock:
+                await self._save()
+            await self._show(query, *self.list_view())
+            return
+        if act == "cfg" and prefs:
+            key, _, value = arg.partition(":")
+            real = {"pace": "pace", "to": "alerts_to", "dg": "digest"}.get(key)
+            if real:
+                await prefs.set(real, value)
+            await self._show(query, *self.list_view())
+            return
+        if act in ("aq", "aqs", "aqe", "adh") and prefs:
+            if act == "aq":
+                await prefs.set("quiet", arg == "1")
+            else:
+                key = {"aqs": "quiet_start", "aqe": "quiet_end", "adh": "digest_hour"}[act]
+                await prefs.set(key, (int(prefs.get(key)) + int(arg)) % 24)
+            await self._show(query, *self.alerts_view())
             return
         if act == "t":  # t:<code>:<user>
             code, _, username = arg.partition(":")
@@ -849,7 +903,7 @@ class WatcherModule(BaseModule):
             self._awaiting[message.chat_id] = ("kw", username)
             await message.reply_text(
                 f"Send the keywords for @{username}, separated by commas. New posts are announced only if the caption contains "
-                "one of them. Send “cancel” to leave it as it is."
+                "one of them. Send cancel to leave it as it is."
             )
         elif act == "kx" and entry:
             await self.update_entry(username, keywords=[])
@@ -859,10 +913,10 @@ class WatcherModule(BaseModule):
             await self._show(query, *self._account_view(username))
         elif act == "rm" and entry:
             markup = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🗑 Yes, remove", callback_data=f"m:{PREFIX}:rc:{username}"),
+                [[InlineKeyboardButton("Yes, remove", callback_data=f"m:{PREFIX}:rc:{username}"),
                   InlineKeyboardButton("Keep", callback_data=f"m:{PREFIX}:ac:{username}")]]
             )
             await self._show(query, f"Stop watching <b>@{esc(username)}</b>?", markup)
         elif act == "rc":
             await self.remove_account(username)
-            await self._show(query, *self._list_view())
+            await self._show(query, *self.list_view())

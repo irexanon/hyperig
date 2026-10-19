@@ -8,10 +8,12 @@ NOTE: this package is called `tg`, not `telegram`, because a local folder named
 `telegram` would shadow the python-telegram-bot library.
 """
 import asyncio
+import html
 import io
 import json
 import re
 import tempfile
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -218,12 +220,6 @@ class _TokenHub:
             except TelegramError:
                 pass
 
-        if msg_id:
-            try:
-                await self.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            except TelegramError:
-                pass
-
         sent = await self.bot.send_message(
             chat_id=chat_id,
             text=text,
@@ -257,26 +253,14 @@ class _TokenHub:
         ]
         return text, InlineKeyboardMarkup(rows)
 
-    def _view_home(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        slot = ws.get_attached_slot() or ws.get_active_slot()
-        group_str = f"Linked (<code>{ws.tg_chat_id}</code>)" if ws.tg_chat_id else "Not linked"
-        bridge_state = "🟢 Enabled" if getattr(ws, "bridge_enabled", True) else "⏸ Paused"
-        if slot:
-            badge = "🟢 Logged in" if slot.ig.logged_in else "🟠 Needs login"
-            ig_str = f"<code>@{slot.ig_username}</code> ({badge})"
-        else:
-            ig_str = "No account added yet"
-
+    def _view_home(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup | None]:
+        """/start: what this bot is. The current state lives in /status."""
         head = f"{notice}\n\n" if notice else ""
         text = (
             f"{head}<b>Hyper Insta</b>\n\n"
-            f"👤 <b>Logged in as:</b> <code>{ws.username}</code>\n"
-            f"📸 <b>Instagram:</b> {ig_str}\n"
-            f"🔁 <b>DM bridge:</b> {bridge_state}\n"
-            f"💬 <b>Telegram group:</b> {group_str}\n\n"
-            "<i>Bridges Instagram DMs to Telegram, downloads media from links, shows public profiles "
-            "and watches public accounts for new activity.</i>\n\n"
-            "Commands: /status /profile /dl /watch /dump /settings /help /logout"
+            "Bridges Instagram DMs to Telegram, downloads media from links, shows public profiles "
+            "and watches public accounts for new activity.\n\n"
+            "Paste an Instagram link to download it."
         )
         return text, None
 
@@ -379,51 +363,59 @@ class _TokenHub:
 
     def _view_status(self, ws) -> tuple[str, InlineKeyboardMarkup]:
         slot = ws.get_attached_slot() or ws.get_active_slot()
-        group_str = f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "Not linked"
-        lines = [
-            "<b>Bridge Status</b>",
-            "",
-            f"👤 <b>Logged in as:</b> <code>{ws.username}</code>",
-            f"💬 <b>Forum Group:</b> {group_str}",
+        enabled = bool(getattr(ws, "bridge_enabled", True))
+        rows_txt = [
+            ("Logged in as", f"<code>{ws.username}</code>"),
+            ("DM bridge", "enabled" if enabled else "paused"),
+            ("Forum group", f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "not linked"),
         ]
         if slot:
-            st = "🟢 Online" if slot.ig.logged_in else "🟠 Offline"
-            rt = "🟢 Connected" if slot.ig.realtime.rt_connected else ("ON" if slot.cfg.realtime else "OFF")
-            fb = "🟢 Connected" if slot.ig.realtime.fbns_connected else ("ON" if slot.cfg.fbns else "OFF")
-            lines.extend(
-                [
-                    f"📸 <b>Attached IG:</b> <code>@{slot.ig_username}</code> ({st})",
-                    f"⚡ <b>Realtime MQTT:</b> {rt} ({slot.ig.realtime.events} events)",
-                    f"🔔 <b>FBNS Push:</b> {fb} ({slot.ig.realtime.pushes} pushes)",
-                    f"💬 <b>Topics:</b> {len(slot.bridge.topics)} · <b>Forwarded:</b> {slot.bridge.forwarded}",
-                ]
-            )
+            rt = "connected" if slot.ig.realtime.rt_connected else ("on" if slot.cfg.realtime else "off")
+            fb = "connected" if slot.ig.realtime.fbns_connected else ("on" if slot.cfg.fbns else "off")
+            rows_txt += [
+                ("Instagram", f"<code>@{slot.ig_username}</code> ({'online' if slot.ig.logged_in else 'offline'})"),
+                ("Realtime", f"{rt} ({slot.ig.realtime.events} events)"),
+                ("Push (FBNS)", f"{fb} ({slot.ig.realtime.pushes} pushes)"),
+                ("Topics", str(len(slot.bridge.topics))),
+                ("Forwarded", str(slot.bridge.forwarded)),
+            ]
+            watcher = slot.modules.get("watcher")
+            if watcher is not None:
+                h = watcher.health()
+                when = "never" if not h["last_check"] else f"{int((time.time() - h['last_check']) // 60)} min ago"
+                rows_txt.append(("Watcher", f"{h['accounts']} account(s), last check {when}"))
+                if h["paused_until"] > time.time():
+                    rows_txt.append(("", f"paused {int((h['paused_until'] - time.time()) // 60) + 1} more min (rate limit)"))
+                if h["queued"]:
+                    rows_txt.append(("Held alerts", str(h["queued"])))
+                for t, u, e in h["errors"][-3:]:
+                    rows_txt.append(("Recent error", f"@{u}: {html.escape(e)}"))
         else:
-            lines.append("📸 <b>Attached IG:</b> None")
-
-        enabled = bool(getattr(ws, "bridge_enabled", True))
-        lines.append(f"🔁 <b>DM bridge:</b> {'Enabled' if enabled else 'Paused'}")
-        rows = [
-            [
-                InlineKeyboardButton("🔄 Refresh", callback_data="nav:status"),
-                InlineKeyboardButton("⚙️ Settings", callback_data="nav:settings"),
-            ],
-            [InlineKeyboardButton("⬅️ Settings", callback_data="nav:settings")],
-        ]
-        return "\n".join(lines), InlineKeyboardMarkup(rows)
+            rows_txt.append(("Instagram", "none added"))
+        pad = max(len(k) for k, _ in rows_txt)
+        lines = ["<b>Status</b>", ""] + [f"{k}: {v}" if k else f"    {v}" for k, v in rows_txt]
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Refresh", callback_data="nav:status"),
+            InlineKeyboardButton("Settings", callback_data="nav:settings"),
+        ]])
+        return "\n".join(lines), markup
 
     def _view_settings(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         head = f"{notice}\n\n" if notice else ""
         text = (
-            f"{head}<b>⚙️ Settings</b>\n\n"
-            f"📸 <b>Manage Accounts</b> · {len(ws.slots)} Instagram account(s); login, Realtime/FBNS, remove\n"
-            f"🌉 <b>Bridge Settings</b> · DM bridge on/off, bridged account, forum group\n"
-            f"👁 <b>Watch Settings</b> · what to watch, features on/off, alerts, pace, downloads, health"
+            f"{head}<b>Settings</b>\n\n"
+            f"Accounts: {len(ws.slots)} Instagram account(s)\n"
+            "Bridge: DM bridge, bridged account, forum group\n"
+            "Watchlist: accounts to watch and how alerts behave\n"
+            "Features: switch tools on or off\n"
+            "Downloads: file size limit, audio button"
         )
         rows = [
-            [InlineKeyboardButton("📸 Manage Accounts", callback_data="nav:accounts")],
-            [InlineKeyboardButton("🌉 Bridge Settings", callback_data="nav:bridge")],
-            [InlineKeyboardButton("👁 Watch Settings", callback_data="pn:home")],
+            [InlineKeyboardButton("Accounts", callback_data="nav:accounts"),
+             InlineKeyboardButton("Bridge", callback_data="nav:bridge"),
+             InlineKeyboardButton("Watchlist", callback_data="nav:watch")],
+            [InlineKeyboardButton("Features", callback_data="pn:ft"),
+             InlineKeyboardButton("Downloads", callback_data="pn:dl")],
         ]
         return text, InlineKeyboardMarkup(rows)
 
@@ -434,19 +426,17 @@ class _TokenHub:
         attached = f"@{slot.ig_username}" if slot else "No account selected"
         head = f"{notice}\n\n" if notice else ""
         text = (
-            f"{head}<b>🌉 Bridge Settings</b>\n\n"
-            f"DM bridge: <b>{'🟢 Enabled' if enabled else '⏸ Paused'}</b>\n"
+            f"{head}<b>Bridge</b>\n\n"
+            f"DM bridge: <b>{'enabled' if enabled else 'paused'}</b>\n"
             f"Bridged account: <b>{attached}</b>\n"
             f"Forum group: {group}\n\n"
             "Pausing the bridge stops group routing; it does not log Instagram out."
         )
         rows = [
-            [InlineKeyboardButton(
-                "⏸ Pause DM Bridge" if enabled else "▶️ Enable DM Bridge", callback_data="settings:bridge",
-            )],
-            [InlineKeyboardButton("🔀 Choose Bridged Account", callback_data="settings:choose_account")],
-            [InlineKeyboardButton("💬 Configure Forum Group", callback_data="nav:group")],
-            [InlineKeyboardButton("⬅️ Settings", callback_data="nav:settings")],
+            [InlineKeyboardButton("Pause bridge" if enabled else "Enable bridge", callback_data="settings:bridge"),
+             InlineKeyboardButton("Choose account", callback_data="settings:choose_account")],
+            [InlineKeyboardButton("Forum group", callback_data="nav:group"),
+             InlineKeyboardButton("Back", callback_data="nav:settings")],
         ]
         return text, InlineKeyboardMarkup(rows)
 
@@ -595,8 +585,17 @@ class _TokenHub:
 
             if data == "nav:watch":
                 slot = ws.get_attached_slot() or ws.get_active_slot()
-                if slot:
-                    await slot.bridge._handle_command("watchlist", [], update)
+                watcher = slot.modules.get("watcher") if slot else None
+                if slot and watcher is not None and slot.modules.is_enabled(watcher):
+                    text, markup = watcher.list_view()
+                    await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                elif slot:
+                    await self._show_panel(
+                        chat_id, user_id, "The watcher is turned off. Turn it on in Settings, Features.",
+                        InlineKeyboardMarkup([[InlineKeyboardButton("Features", callback_data="pn:ft"),
+                                               InlineKeyboardButton("Back", callback_data="nav:settings")]]),
+                        edit_msg=query.message,
+                    )
                 else:
                     text, markup = self._view_add_ig("Add and log in to an Instagram account before using Watch.")
                     await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
