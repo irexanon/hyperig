@@ -74,7 +74,8 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 | `/dl <Instagram URL> [audio]` | download a Reel, post, carousel, Story or Highlight; add `audio` for Reel audio |
 | `/profile <user>` | detailed public profile info |
 | `/pfp <user>` | profile picture, full size |
-| `/posts <user> [n]`, `/reels <user> [n]` | latest posts (1-20) or reels (1-10) |
+| `/posts <user> [n]`, `/reels <user> [n]` | latest posts (1-50) or reels (1-30); in `/dump` pick a count or type your own |
+| `/followers <user> [n] [json]`, `/following <user> [n] [json]` | list of a public account's followers / following (up to 2000) as a .txt or .json file with id, username and name only |
 | `/stories <user>`, `/highlights <user>` | current stories, or a button list of highlights |
 
 | `/watch <user> [posts] [stories] [profile] [highlights] [edits] [engagement] [everything]` | watch a public account (no options = posts + stories) |

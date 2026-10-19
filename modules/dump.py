@@ -1,7 +1,7 @@
 """Public-profile tools for Telegram.
 
 /dump <username or link> shows a profile card with a button menu (posts, reels, stories, highlights,
-profile picture, JSON). Plain commands (/profile, /pfp, /posts, /reels, /stories, /highlights) do the
+followers and following lists, JSON). Plain commands (/profile, /pfp, /posts, /reels, /stories, /highlights) do the
 same things without the menu.
 
 Rules this module keeps:
@@ -32,8 +32,9 @@ USERNAME_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
 URL_RE = re.compile(r"^(?:https?://)?(?:www\.)?instagram\.com/([A-Za-z0-9._]{1,30})/?(?:[?#].*)?$", re.I)
 RESERVED = {"p", "reel", "reels", "stories", "explore", "tv", "accounts", "direct", "s"}
 
-POSTS_DEFAULT, POSTS_MAX = 5, 20
-REELS_DEFAULT, REELS_MAX = 3, 10
+POSTS_DEFAULT, POSTS_MAX = 5, 50
+REELS_DEFAULT, REELS_MAX = 3, 30
+LIST_DEFAULT, LIST_MAX = 200, 2000   # followers / following list size
 HIGHLIGHT_BUTTONS = 20
 PREFIX = "dump"
 
@@ -62,6 +63,8 @@ class DumpModule(BaseModule):
         super().__init__(ctx)
         self._busy: set[int] = set()          # chats with a job running
         self._private: dict[str, bool] = {}    # username -> is_private, so "Back" needs no new request
+        self._awaiting: dict[int, tuple[str, str]] = {}   # chat id -> (action, username) waiting for a typed number
+        self._fmt: dict[int, str] = {}         # chat id -> "txt" | "json" for followers / following lists
 
     # ------------------------------------------------------------------ registration
     def get_commands(self):
@@ -73,6 +76,8 @@ class DumpModule(BaseModule):
             "reels": Command(self.cmd_reels, f"Latest reels (1-{REELS_MAX}, default {REELS_DEFAULT})", "/reels <username> [count]", takes_update=True),
             "stories": Command(self.cmd_stories, "Current stories", "/stories <username>", takes_update=True),
             "highlights": Command(self.cmd_highlights, "Highlights list with buttons", "/highlights <username>", takes_update=True),
+            "followers": Command(self.cmd_followers, f"Followers list as a file (up to {LIST_MAX})", "/followers <username> [count] [json]", takes_update=True),
+            "following": Command(self.cmd_following, f"Following list as a file (up to {LIST_MAX})", "/following <username> [count] [json]", takes_update=True),
         }
 
     def get_callbacks(self):
@@ -133,7 +138,9 @@ class DumpModule(BaseModule):
             lines.append(f"🏷 {_esc(category)}")
         if detailed:
             lines += ["", f"🆔 <code>{u.pk}</code>"]
-            lines.append("💼 Business account" if u.is_business else "👤 Personal account")
+        kind = "💼 Business" if u.is_business else "👤 Personal"
+        lines.append(f"{'🔒 Private' if u.is_private else '🌐 Public'} account · {kind}" if detailed else
+                     f"{'🔒 Private' if u.is_private else '🌐 Public'} account")
         if u.is_private:
             lines += ["", "🔒 Private account: only this public info is shown."]
         return "\n".join(lines)
@@ -144,7 +151,8 @@ class DumpModule(BaseModule):
         if not private:
             rows.append([_btn("📸 Posts", "pm", username), _btn("🎬 Reels", "rm", username)])
             rows.append([_btn("📖 Stories", "st", username), _btn("⭐ Highlights", "hl", username)])
-        rows.append([_btn("🖼 Profile pic", "pp", username), _btn("📄 JSON", "js", username)])
+            rows.append([_btn("👥 Followers / Following", "lm", username)])
+        rows.append([_btn("📄 JSON", "js", username)])
         rows.append(
             [
                 InlineKeyboardButton("🔗 Instagram", url=f"https://www.instagram.com/{username}/"),
@@ -155,10 +163,21 @@ class DumpModule(BaseModule):
 
     @staticmethod
     def _count_menu(kind: str, username: str) -> InlineKeyboardMarkup:
-        counts = (5, 10, POSTS_MAX) if kind == "p" else (3, 5, REELS_MAX)
+        counts = (5, 10, 20, POSTS_MAX) if kind == "p" else (3, 5, 10, REELS_MAX)
         row = [_btn(f"{n}", f"{kind}{n}", username) for n in counts]
-        label = "latest posts" if kind == "p" else "latest reels"
-        return InlineKeyboardMarkup([row, [_btn(f"⬅️ Back (how many {label}?)", "bk", username)]])
+        label = "posts" if kind == "p" else "reels"
+        return InlineKeyboardMarkup([row, [_btn("✏️ Type a number", "cu", f"{kind}:{username}")],
+                                     [_btn(f"⬅️ Back (how many {label}?)", "bk", username)]])
+
+    def _list_menu(self, chat_id: int, username: str) -> InlineKeyboardMarkup:
+        fmt = self._fmt.get(chat_id, "txt")
+        rows = []
+        for kind, label in (("f", "👥 Followers"), ("g", "➡️ Following")):
+            rows.append([_btn(f"{label} {n}", f"l{kind}{n}", username) for n in (100, 500, 1000)])
+            rows.append([_btn(f"✏️ {label.split(' ', 1)[1]}: type a number", "cu", f"l{kind}:{username}")])
+        rows.append([_btn(f"File format: {fmt.upper()} (tap to switch)", "ft", username)])
+        rows.append([_btn("⬅️ Back", "bk", username)])
+        return InlineKeyboardMarkup(rows)
 
     # ------------------------------------------------------------------ telegram helpers
     @staticmethod
@@ -251,6 +270,9 @@ class DumpModule(BaseModule):
         user = await self._public_profile(username)  # everything below needs a public account
         pk = str(user.pk)
 
+        if act in ("lf", "lg"):
+            return await self._send_list(bot, chat_id, status, user, act == "lf", n)
+
         if act in ("p", "r"):
             if act == "p":
                 n = max(1, min(n or POSTS_DEFAULT, POSTS_MAX))
@@ -275,6 +297,31 @@ class DumpModule(BaseModule):
             return await self._send_many(bot, chat_id, status, hl.items, "story")
 
         raise RuntimeError("Unknown action.")
+
+    async def _send_list(self, bot, chat_id, status, user, followers: bool, n: int) -> tuple[int, int]:
+        """Followers / following of a public account as a txt or json file: id, username and display name only."""
+        n = max(1, min(n or LIST_DEFAULT, LIST_MAX))
+        word = "followers" if followers else "following"
+        total = user.follower_count if followers else user.following_count
+        await self._edit(status, f"⏳ Collecting up to {n} {word} of @{_esc(user.username)}… large lists take a few minutes.")
+        pk = str(user.pk)
+        cl = self.ctx.ig.cl
+        found = await self._ig(lambda: (cl.user_followers(pk, amount=n) if followers else cl.user_following(pk, amount=n)))
+        people = [{"id": str(u.pk), "username": u.username, "full_name": u.full_name or ""} for u in list(found.values())[:n]]
+        if not people:
+            raise RuntimeError(f"No {word} could be read (the list may be hidden).")
+        fmt = self._fmt.get(chat_id, "txt")
+        if fmt == "json":
+            raw = json.dumps({"account": user.username, "list": word, "listed": len(people), "total": total, "users": people},
+                             indent=2, ensure_ascii=False).encode("utf-8")
+        else:
+            head = f"# {word} of @{user.username}: {len(people)} of {total}\n# username | full name | id\n"
+            raw = (head + "\n".join(f"{p['username']} | {p['full_name']} | {p['id']}" for p in people)).encode("utf-8")
+        await bot.send_document(
+            chat_id, document=InputFile(io.BytesIO(raw), filename=f"{user.username}_{word}.{fmt}"),
+            caption=f"{len(people)} {word} of @{user.username} (of {_num(total)} total)",
+        )
+        return 0, 0
 
     async def _send_many(self, bot, chat_id, status, medias, kind: str) -> tuple[int, int]:
         sent = 0
@@ -341,7 +388,7 @@ class DumpModule(BaseModule):
     async def cmd_dump(self, args, update):
         username = await self._target(args, update, "/dump <username or link>")
         if username:
-            await self._card_message(update, username, detailed=False, with_menu=True)
+            await self._card_message(update, username, detailed=True, with_menu=True)
 
     async def cmd_profile(self, args, update):
         username = await self._target(args, update, "/profile <username or link>")
@@ -359,6 +406,27 @@ class DumpModule(BaseModule):
             except ValueError:
                 pass
         await self._run(update.get_bot(), update.effective_chat.id, act, username, n)
+
+    async def _list_cmd(self, args, update, act: str, usage: str) -> None:
+        username = await self._target(args, update, usage)
+        if not username:
+            return
+        chat_id, n = update.effective_chat.id, LIST_DEFAULT
+        for a in args[1:]:
+            if a.lower() in ("json", "txt"):
+                self._fmt[chat_id] = a.lower()
+            else:
+                try:
+                    n = max(1, min(int(a), LIST_MAX))
+                except ValueError:
+                    pass
+        await self._run(update.get_bot(), chat_id, act, username, n)
+
+    async def cmd_followers(self, args, update):
+        await self._list_cmd(args, update, "lf", "/followers <username> [count] [json]")
+
+    async def cmd_following(self, args, update):
+        await self._list_cmd(args, update, "lg", "/following <username> [count] [json]")
 
     async def cmd_pfp(self, args, update):
         await self._simple(args, update, "/pfp <username>", "pp")
@@ -393,8 +461,26 @@ class DumpModule(BaseModule):
                 await self._run(bot, chat_id, "h", username, hl_pk=hl_pk)
             return
 
+        if act == "cu":  # "Type a number"
+            kind, _, who = arg.partition(":")
+            if kind in ("p", "r", "lf", "lg") and USERNAME_RE.match(who):
+                self._awaiting[chat_id] = (kind, who)
+                cap = {"p": POSTS_MAX, "r": REELS_MAX}.get(kind, LIST_MAX)
+                await bot.send_message(chat_id, f"Send how many (1-{cap}) for @{who}, or “cancel”.")
+            return
+
         username = arg
         if not USERNAME_RE.match(username):
+            return
+
+        if act == "ft":
+            self._fmt[chat_id] = "json" if self._fmt.get(chat_id, "txt") == "txt" else "txt"
+            act = "lm"
+        if act == "lm":
+            try:
+                await query.edit_message_reply_markup(reply_markup=self._list_menu(chat_id, username))
+            except TelegramError:
+                pass
             return
 
         if act in ("pm", "rm", "bk"):
@@ -418,5 +504,29 @@ class DumpModule(BaseModule):
         counted = re.fullmatch(r"([pr])(\d+)", act)
         if counted:
             await self._run(bot, chat_id, counted.group(1), username, int(counted.group(2)))
+            return
+
+        listed = re.fullmatch(r"l([fg])(\d+)", act)
+        if listed:
+            await self._run(bot, chat_id, "l" + listed.group(1), username, int(listed.group(2)))
         elif act in ("pp", "st", "hl", "js"):
             await self._run(bot, chat_id, act, username)
+
+    # ------------------------------------------------------------------ typed number
+    async def on_text(self, text: str, update) -> bool:
+        message = update.effective_message
+        wanted = self._awaiting.pop(message.chat_id, None)
+        if not wanted:
+            return False
+        kind, username = wanted
+        word = text.strip().lower()
+        if word in ("cancel", "stop"):
+            await message.reply_text("Cancelled.")
+            return True
+        cap = {"p": POSTS_MAX, "r": REELS_MAX}.get(kind, LIST_MAX)
+        if not word.isdigit() or not 1 <= int(word) <= cap:
+            self._awaiting[message.chat_id] = wanted
+            await message.reply_text(f"Send a number from 1 to {cap} (or “cancel”).")
+            return True
+        await self._run(update.get_bot(), message.chat_id, kind, username, int(word))
+        return True
