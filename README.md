@@ -88,24 +88,21 @@ that disappeared), and milestones (likes/comments on recent posts, follower coun
 reels, caption keywords. Per account: pause, own interval. What exists when you add an account or switch a
 feature on is recorded silently, so you only get what happens afterwards. Seen items are saved, so restarts
 never repeat or lose anything. A rate limit pauses all checks for 15 minutes and tells you once; an account that
-turns private is removed. Alerts can go to this chat or the forum group, be held during quiet hours, or be
-batched into a daily digest.
+turns private is removed. Alerts arrive in your chat with the bot as soon as something is captured.
 
 Only what Instagram shows publicly about public accounts is watched. Who someone follows, what they like or
 comment on elsewhere, online status and activity-time patterns are not exposed and are not tracked.
 
 ## Settings
 
-`/settings` opens with a summary of what is currently applied (accounts, bridge, watchlist pace and alert
-options, switched-off features), then horizontal buttons: **Accounts**, **Bridge**, **Watchlist**, **Features**.
+`/settings` opens with a summary of what is currently applied (accounts, bridge, watchlist, switched-off features), then horizontal buttons: **Accounts**, **Bridge**, **Watchlist**, **Features**.
 
 - **Accounts**: the Instagram accounts. Each account screen has login/relogin, Realtime and FBNS switches,
   session download, Logout and Remove (both ask for confirmation).
 - **Bridge**: DM bridge on/off, which account is bridged, the forum group.
-- **Watchlist**: the watched accounts (tap one to choose what to watch on it, its interval, filters, pause),
-  Add account, Check now, Pause all. **Alert settings** has four buttons that each switch to their next value:
-  speed (safe / normal / fast), send to (this chat / forum group), delivery (instant / daily digest) and
-  quiet hours, with a line explaining each.
+- **Watchlist**: the watched accounts, with Add account, Check now and Pause all. Tap an account to switch what
+  to watch on it (posts, stories, profile, highlights, edits, engagement, or Everything), its check interval,
+  filters and pause. Alerts are sent to your chat with the bot as soon as something is captured.
 - **Features**: switch the profile tools, link downloader and watcher on or off.
 
 Downloads always send the largest file Telegram bots allow (50 MB); a bigger file is reported, not sent.

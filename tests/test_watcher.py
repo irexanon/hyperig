@@ -120,18 +120,7 @@ def test_everything():
         await w._check_all()
         assert "new highlight" in "\n".join(bot.log)
 
-        # quiet hours / digest: held back, flushed later
-        await ctx.prefs.set("digest", "daily")
-        await ctx.prefs.set("digest_hour", 0)
-        cl.posts = [post(9, "late", mins=50)]
-        before = len(bot.log)
-        await w._check_all()
-        assert len(bot.log) == before and w._queue
-        await w._flush_queue()
-        assert "Daily digest" in bot.log[-1] and not w._queue
-
         # filters, pause, switch off
-        await ctx.prefs.set("digest", "instant")
         await w.update_entry("nasa", keywords=["trip"], paused=True)
         cl.posts.append(post(10, "nothing", mins=60))
         before = len(bot.log)

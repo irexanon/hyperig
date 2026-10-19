@@ -386,8 +386,6 @@ class _TokenHub:
                 rows_txt.append(("Watcher", f"{h['accounts']} account(s), last check {when}"))
                 if h["paused_until"] > time.time():
                     rows_txt.append(("", f"paused {int((h['paused_until'] - time.time()) // 60) + 1} more min (rate limit)"))
-                if h["queued"]:
-                    rows_txt.append(("Held alerts", str(h["queued"])))
                 for t, u, e in h["errors"][-3:]:
                     rows_txt.append(("Recent error", f"@{u}: {html.escape(e)}"))
         else:
@@ -415,12 +413,7 @@ class _TokenHub:
             prefs = slot.ctx.prefs
             watcher = slot.modules.get("watcher")
             if watcher is not None and slot.modules.is_enabled(watcher):
-                h = watcher.health()
-                pace = prefs.get("pace")
-                dest = "forum group" if prefs.get("alerts_to") == "group" else "this chat"
-                mode = f"daily digest at {int(prefs.get('digest_hour')):02d}:00" if prefs.get("digest") == "daily" else "instant"
-                quiet = f", quiet {int(prefs.get('quiet_start')):02d}:00 to {int(prefs.get('quiet_end')):02d}:00" if prefs.get("quiet") else ""
-                lines.append(f"Watchlist: {h['accounts']} account(s), {pace} pace, alerts to {dest}, {mode}{quiet}")
+                lines.append(f"Watchlist: {watcher.health()['accounts']} account(s), alerts to this chat as they happen")
             else:
                 lines.append("Watchlist: off")
             off = [m.name for m in slot.modules.modules if getattr(m, "toggleable", False) and not prefs.feature_on(m.name)]
@@ -1090,9 +1083,10 @@ class _TokenHub:
                     await slot.bridge._handle_command(cmd_name, args, update)
                     return
 
-            # Default: show Home Menu
-            v_txt, markup = self._view_home(ws)
-            await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+            # Anything else (plain text that nothing was waiting for, a command with no account yet): stay quiet,
+            # except for a command that needs an Instagram account.
+            if text.startswith("/"):
+                await self.bot.send_message(chat_id, "Add an Instagram account first: /accounts")
         finally:
             current_user_var.reset(tok)
 

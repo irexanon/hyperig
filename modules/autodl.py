@@ -5,6 +5,7 @@ Downloads use instagrapi's media-specific helpers and a temporary folder so full
 files can be uploaded to Telegram without leaving files behind.
 """
 import html
+import time
 import re
 import tempfile
 from pathlib import Path
@@ -273,6 +274,17 @@ class AutoDownloadModule(BaseModule):
         )
 
     def _download_sync(self, url: str, category: str, folder: Path, audio: bool = False) -> dict:
+        """A link you pasted is a one-off request, so skip the random pause instagrapi adds after every call
+        (meant for bulk scraping). It is only a few calls, not a loop."""
+        cl = self.ctx.ig.cl
+        saved = cl.delay_range
+        cl.delay_range = None
+        try:
+            return self._download_inner(url, category, folder, audio)
+        finally:
+            cl.delay_range = saved
+
+    def _download_inner(self, url: str, category: str, folder: Path, audio: bool = False) -> dict:
         """Perform network operations synchronously under InstagramClient's single-call lock."""
         cl = self.ctx.ig.cl
         if category == "reel":
@@ -408,7 +420,9 @@ class AutoDownloadModule(BaseModule):
             with tempfile.TemporaryDirectory(prefix="hyperig-dl-") as temp:
                 folder = Path(temp)
                 await status.set("Fetching media from Instagram", 0.3)
+                t0 = time.monotonic()
                 result = await self._ig(lambda: self._download_sync(url, category, folder, audio=audio))
+                t1 = time.monotonic()
                 paths = result["paths"]
                 if not paths:
                     raise RuntimeError("Instagram returned no downloadable media files.")
@@ -416,7 +430,11 @@ class AutoDownloadModule(BaseModule):
                 total_mb = sum(p.stat().st_size for p in paths) / 1_000_000
                 await status.set(f"Uploading {len(paths)} file(s), {total_mb:.1f} MB", 0.7)
                 sent = await self._send_paths(update.get_bot(), chat_id, paths, caption)
-                await status.done(f"{result['kind'].title()}, {sent} file(s), {total_mb:.1f} MB")
+                t2 = time.monotonic()
+                await status.done(
+                    f"{result['kind'].title()}, {sent} file(s), {total_mb:.1f} MB\n"
+                    f"Instagram {t1 - t0:.1f}s, upload to Telegram {t2 - t1:.1f}s"
+                )
                 if result["is_reel"] and not audio and self.ctx.prefs.get("dl_audio", True):
                     markup = InlineKeyboardMarkup(
                         [[InlineKeyboardButton("Download original audio", callback_data=f"m:autodl:a:{result['pk']}")]]
@@ -444,9 +462,13 @@ class AutoDownloadModule(BaseModule):
 
                 def download():
                     cl = self.ctx.ig.cl
-                    media = cl.media_info(media_pk)
-                    audio_url = self._track_url(cl, media)
-                    return self._paths(cl.track_download_by_url(audio_url, filename="original_audio", folder=folder), folder)
+                    saved, cl.delay_range = cl.delay_range, None
+                    try:
+                        media = cl.media_info(media_pk)
+                        audio_url = self._track_url(cl, media)
+                        return self._paths(cl.track_download_by_url(audio_url, filename="original_audio", folder=folder), folder)
+                    finally:
+                        cl.delay_range = saved
 
                 paths = await self._ig(download)
                 if not paths:

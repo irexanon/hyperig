@@ -14,14 +14,7 @@ PACES = ("safe", "normal", "fast")
 
 DEFAULTS: dict[str, Any] = {
     "features": {},          # module name -> bool; a missing name means ON
-    "pace": "normal",        # safe | normal | fast: how gently the watcher talks to Instagram
-    "alerts_to": "dm",       # dm | group: where watcher alerts go
-    "digest": "instant",     # instant | daily: send alerts as they happen, or one summary a day
-    "digest_hour": 20,       # local hour of the daily summary
-    "quiet": False,          # hold alerts back during quiet hours (sent afterwards as one message)
-    "quiet_start": 23,       # local hour quiet hours begin
-    "quiet_end": 7,          # local hour quiet hours end
-    "tz_hours": None,        # hours from UTC for the three settings above; None = the account's timezone setting
+    "pace": "normal",        # safe | normal | fast: how gently the watcher talks to Instagram (no screen; default is fine)
     "dl_audio": True,        # offer "download original audio" under downloaded Reels
 }
 
@@ -62,11 +55,3 @@ class Prefs:
     async def set_feature(self, name: str, on: bool) -> None:
         self.data["features"][name] = bool(on)
         await self._save()
-
-    # ---- time helpers (quiet hours / digest are in the owner's local time)
-    def tz_hours(self, cfg=None) -> float:
-        value = self.data.get("tz_hours")
-        if value is not None:
-            return float(value)
-        seconds = getattr(cfg, "ig_timezone_offset", None)
-        return float(seconds) / 3600 if seconds else 0.0

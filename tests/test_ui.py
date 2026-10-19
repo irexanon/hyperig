@@ -47,7 +47,7 @@ def test_views():
     rows = [[b.callback_data for b in r] for r in markup.inline_keyboard]
     assert rows[0] == ["nav:accounts", "nav:bridge", "nav:watch"]      # horizontal, Watchlist is its own entry
     assert "Health" not in text and "Realtime" not in text and "pn:dl" not in sum(rows, [])
-    assert "Watchlist:" in text and "Features: all on" in text and "50 MB" in text
+    assert "Watchlist: 0 account(s)" in text and "Features: all on" in text and "50 MB" in text
 
     text, markup = hub._view_bridge(ws)
     assert "settings:bridge" in callbacks(markup) and not any("rt" in c or "fbns" in c for c in callbacks(markup))
@@ -65,7 +65,7 @@ def test_panel_and_watchlist():
         await w.add_account("nasa", {"p"})
         text, markup = w.list_view()
         cbs = callbacks(markup)
-        assert "m:watch:ac:nasa" in cbs and "m:watch:al:-" in cbs and not any(":cy:" in c for c in cbs)
+        assert "m:watch:ac:nasa" in cbs and not any(":cy:" in c or ":al:" in c for c in cbs)
 
         class Q:
             message = NS(chat_id=1, reply_text=None)
@@ -74,15 +74,12 @@ def test_panel_and_watchlist():
             async def edit_message_text(self, t, **k):
                 Q.shown.append(t)
         q = Q()
-        await w.on_button("al:-", q, None)
-        assert "Speed: <b>normal</b>" in Q.shown[-1]
-        await w.on_button("cy:pace", q, None)
-        assert ctx.prefs.get("pace") == "fast"
-        await w.on_button("cy:dg", q, None)
-        assert "One summary every day at 20:00" in Q.shown[-1]
-        await w.on_button("cy:q", q, None)
-        await w.on_button("cy:qs", q, None)
-        assert ctx.prefs.get("quiet") and ctx.prefs.get("quiet_start") == 0 and "00:00 to 07:00" in Q.shown[-1]
+        await w.on_button("ac:nasa", q, None)
+        assert "Watching: posts" in Q.shown[-1]
+        await w.on_button("ev:nasa", q, None)
+        assert all(w._watch["nasa"][k] for k, _n, _s in __import__("modules.watcher", fromlist=["FLAGS"]).FLAGS.values())
+        assert "Watching: posts, stories, profile, highlights, edits, milestones" in Q.shown[-1]
+        await w.on_button("ls:-", q, None)
         await w.on_button("pa:-", q, None)
         assert w._watch["nasa"]["paused"]
         await w.on_button("pa:-", q, None)
@@ -115,3 +112,14 @@ def test_progress():
         await p.fail("x < y")
         assert "&lt;" in log[-1]
     asyncio.run(main())
+
+
+def test_download_skips_instagrapi_delay():
+    ctx, _ = build(Store(), Cl(), Bot())
+    d = ctx.modules.get("autodl")
+    cl = ctx.ig.cl
+    cl.delay_range = [1, 3]
+    seen = []
+    d._download_inner = lambda *a, **k: seen.append(cl.delay_range) or {"paths": []}
+    d._download_sync("u", "post", Path("."))
+    assert seen == [None] and cl.delay_range == [1, 3]
