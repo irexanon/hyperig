@@ -386,8 +386,6 @@ class _TokenHub:
                 rows_txt.append(("Watcher", f"{h['accounts']} account(s), last check {when}"))
                 if h["paused_until"] > time.time():
                     rows_txt.append(("", f"paused {int((h['paused_until'] - time.time()) // 60) + 1} more min (rate limit)"))
-                if h["queued"]:
-                    rows_txt.append(("Held alerts", str(h["queued"])))
                 for t, u, e in h["errors"][-3:]:
                     rows_txt.append(("Recent error", f"@{u}: {html.escape(e)}"))
         else:
@@ -401,23 +399,37 @@ class _TokenHub:
         return "\n".join(lines), markup
 
     def _view_settings(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        """Settings home: what is currently applied, with one button per area."""
+        slot = ws.get_attached_slot() or ws.get_active_slot()
         head = f"{notice}\n\n" if notice else ""
-        text = (
-            f"{head}<b>Settings</b>\n\n"
-            f"Accounts: {len(ws.slots)} Instagram account(s)\n"
-            "Bridge: DM bridge, bridged account, forum group\n"
-            "Watchlist: accounts to watch and how alerts behave\n"
-            "Features: switch tools on or off\n"
-            "Downloads: file size limit, audio button"
-        )
+        enabled = bool(getattr(ws, "bridge_enabled", True))
+        lines = [
+            "<b>Settings</b>",
+            "",
+            f"Accounts: {len(ws.slots)} Instagram account(s)" + (f", bridged: @{slot.ig_username}" if slot else ""),
+            f"DM bridge: {'enabled' if enabled else 'paused'}, forum group {'linked' if ws.tg_chat_id else 'not linked'}",
+        ]
+        if slot:
+            prefs = slot.ctx.prefs
+            watcher = slot.modules.get("watcher")
+            if watcher is not None and slot.modules.is_enabled(watcher):
+                dest = "forum group" if prefs.get("alerts_to") == "group" else "this chat"
+                lines.append(f"Watchlist: {watcher.health()['accounts']} account(s), alerts to {dest} as they happen")
+            else:
+                lines.append("Watchlist: off")
+            off = [m.name for m in slot.modules.modules if getattr(m, "toggleable", False) and not prefs.feature_on(m.name)]
+            lines.append("Features: all on" if not off else "Features: off: " + ", ".join(off))
+        lines += [
+            "",
+            "Downloads send the largest file Telegram bots allow (50 MB).",
+        ]
         rows = [
             [InlineKeyboardButton("Accounts", callback_data="nav:accounts"),
              InlineKeyboardButton("Bridge", callback_data="nav:bridge"),
              InlineKeyboardButton("Watchlist", callback_data="nav:watch")],
-            [InlineKeyboardButton("Features", callback_data="pn:ft"),
-             InlineKeyboardButton("Downloads", callback_data="pn:dl")],
+            [InlineKeyboardButton("Features", callback_data="pn:ft")],
         ]
-        return text, InlineKeyboardMarkup(rows)
+        return head + "\n".join(lines), InlineKeyboardMarkup(rows)
 
     def _view_bridge(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         slot = ws.get_attached_slot() or ws.get_active_slot()
@@ -1072,9 +1084,10 @@ class _TokenHub:
                     await slot.bridge._handle_command(cmd_name, args, update)
                     return
 
-            # Default: show Home Menu
-            v_txt, markup = self._view_home(ws)
-            await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+            # Anything else (plain text that nothing was waiting for, a command with no account yet): stay quiet,
+            # except for a command that needs an Instagram account.
+            if text.startswith("/"):
+                await self.bot.send_message(chat_id, "Add an Instagram account first: /accounts")
         finally:
             current_user_var.reset(tok)
 

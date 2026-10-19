@@ -84,32 +84,32 @@ the server on top of it and silently keeps the cookie session if that fails. Giv
 **Watcher** (`modules/watcher.py`): up to 10 public accounts, each on its own schedule with jitter and a pause
 between accounts. Per account you can switch on: new posts/reels, stories, profile changes (name, bio, link,
 category, verified badge, picture), highlights (new ones, new items), edits and removals (caption edits, posts
-that disappeared), and milestones (likes/comments on recent posts, follower counts). Filters: only posts or only
-reels, caption keywords. Per account: pause, own interval. What exists when you add an account or switch a
+that disappeared), and milestones (likes/comments on recent posts, follower counts). Per account you can pause it or switch each of these on and off.
+What exists when you add an account or switch a
 feature on is recorded silently, so you only get what happens afterwards. Seen items are saved, so restarts
 never repeat or lose anything. A rate limit pauses all checks for 15 minutes and tells you once; an account that
-turns private is removed. Alerts can go to this chat or the forum group, be held during quiet hours, or be
-batched into a daily digest.
+turns private is removed. Alerts arrive in your chat with the bot as soon as something is captured.
 
 Only what Instagram shows publicly about public accounts is watched. Who someone follows, what they like or
 comment on elsewhere, online status and activity-time patterns are not exposed and are not tracked.
 
 ## Settings
 
-`/settings` shows horizontal buttons: **Accounts**, **Bridge**, **Watchlist**, **Features**, **Downloads**.
+`/settings` opens with a summary of what is currently applied (accounts, bridge, watchlist, switched-off features), then horizontal buttons: **Accounts**, **Bridge**, **Watchlist**, **Features**.
 
 - **Accounts**: the Instagram accounts. Each account screen has login/relogin, Realtime and FBNS switches,
   session download, Logout and Remove (both ask for confirmation).
 - **Bridge**: DM bridge on/off, which account is bridged, the forum group.
-- **Watchlist**: the watched accounts (tap one for its own options) plus everything about alerts: pace
-  (safe / normal / fast), where alerts go, instant or daily digest, quiet hours, pause all, check now.
+- **Watchlist**: the watched accounts, with Add account, Check now and Pause all. Tap an account to switch what
+  to watch on it (posts, stories, profile, highlights, edits, engagement, or Everything) or pause it. Alerts are
+  sent as soon as something is captured, to your chat with the bot or to the forum group (the Alerts to button).
 - **Features**: switch the profile tools, link downloader and watcher on or off.
-- **Downloads**: largest file, audio button.
 
-Saved per Instagram account. `/start` is a short intro, `/status` shows the current state (account, bridge,
-group, topics, realtime, watcher health and recent errors). The bot does not delete its own messages; only
-the password / secret / cookie you type while logging in is removed from the chat. Downloads and dumps show
-one plain progress message that updates in place and stays as the result.
+Downloads always send the largest file Telegram bots allow (50 MB); a bigger file is reported, not sent.
+Settings are saved per Instagram account. `/start` is a short intro, `/status` shows the current state
+(account, bridge, group, topics, realtime, watcher health and recent errors). The bot does not delete its own
+messages; only the password / secret / cookie you type while logging in is removed from the chat. Downloads
+and dumps show one plain progress message that updates in place and stays as the result.
 
 ## Instagram link downloader
 

@@ -46,7 +46,8 @@ def test_views():
     text, markup = hub._view_settings(ws)
     rows = [[b.callback_data for b in r] for r in markup.inline_keyboard]
     assert rows[0] == ["nav:accounts", "nav:bridge", "nav:watch"]      # horizontal, Watchlist is its own entry
-    assert "Health" not in text and "Realtime" not in text
+    assert "Health" not in text and "Realtime" not in text and "pn:dl" not in sum(rows, [])
+    assert "Watchlist: 0 account(s)" in text and "Features: all on" in text and "50 MB" in text
 
     text, markup = hub._view_bridge(ws)
     assert "settings:bridge" in callbacks(markup) and not any("rt" in c or "fbns" in c for c in callbacks(markup))
@@ -58,18 +59,13 @@ def test_panel_and_watchlist():
         text, markup = await panel.handle(ws, "pn:ft:watcher")
         assert "off" in text and not ctx.modules.is_enabled(w)
         await panel.handle(ws, "pn:ft:watcher")
-        text, _ = await panel.handle(ws, "pn:mb:35")
-        assert slot.cfg.max_media_mb == 35
-        await ctx.prefs.set("dl_audio", True)
-        text, markup = await panel.handle(ws, "pn:audio")
-        assert ctx.prefs.get("dl_audio") is False
 
         await w.on_start()
         w._task.cancel()
         await w.add_account("nasa", {"p"})
         text, markup = w.list_view()
         cbs = callbacks(markup)
-        assert "m:watch:ac:nasa" in cbs and "m:watch:cfg:pace:safe" in cbs and not any(c.endswith(":x:-") for c in cbs)
+        assert "m:watch:ac:nasa" in cbs and not any(":cy:" in c or ":al:" in c for c in cbs)
 
         class Q:
             message = NS(chat_id=1, reply_text=None)
@@ -78,17 +74,21 @@ def test_panel_and_watchlist():
             async def edit_message_text(self, t, **k):
                 Q.shown.append(t)
         q = Q()
-        await w.on_button("cfg:pace:safe", q, None)
-        assert ctx.prefs.get("pace") == "safe" and "Pace: safe" in Q.shown[-1]
-        await w.on_button("cfg:dg:daily", q, None)
-        assert "daily digest" in Q.shown[-1]
+        await w.on_button("ac:nasa", q, None)
+        assert "Watching: posts" in Q.shown[-1]
+        await w.on_button("ev:nasa", q, None)
+        assert all(w._watch["nasa"][k] for k, _n, _s in __import__("modules.watcher", fromlist=["FLAGS"]).FLAGS.values())
+        assert "Watching: posts, stories, profile, highlights, edits, milestones" in Q.shown[-1]
+        await w.on_button("ls:-", q, None)
+        assert "sent to: this chat" in Q.shown[-1]
+        await w.on_button("to:-", q, None)
+        assert ctx.prefs.get("alerts_to") == "group" and "sent to: the forum group" in Q.shown[-1]
+        cbs = callbacks(w._account_view("nasa")[1])
+        assert not any(":kw:" in c or ":on:" in c or ":iv:" in c for c in cbs) and "m:watch:ev:nasa" in cbs
         await w.on_button("pa:-", q, None)
         assert w._watch["nasa"]["paused"]
         await w.on_button("pa:-", q, None)
         assert not w._watch["nasa"]["paused"]
-        await w.on_button("aq:1", q, None)
-        await w.on_button("aqs:1", q, None)
-        assert ctx.prefs.get("quiet") and ctx.prefs.get("quiet_start") == 0 and "Quiet hours: on" in Q.shown[-1]
     run(main())
 
 
@@ -117,3 +117,14 @@ def test_progress():
         await p.fail("x < y")
         assert "&lt;" in log[-1]
     asyncio.run(main())
+
+
+def test_download_skips_instagrapi_delay():
+    ctx, _ = build(Store(), Cl(), Bot())
+    d = ctx.modules.get("autodl")
+    cl = ctx.ig.cl
+    cl.delay_range = [1, 3]
+    seen = []
+    d._download_inner = lambda *a, **k: seen.append(cl.delay_range) or {"paths": []}
+    d._download_sync("u", "post", Path("."))
+    assert seen == [None] and cl.delay_range == [1, 3]

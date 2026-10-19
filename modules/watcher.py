@@ -11,7 +11,7 @@ What it can watch, per account (all switchable on the account's screen):
   highlights       new highlights, and items added to existing ones
   edits & removals caption edits; posts that disappeared (deleted or archived)
   milestones       likes/comments crossing round numbers on recent posts; follower milestones
-Filters: only posts or only reels, caption keywords. Per account: pause, own check interval.
+Per account: pause, or switch each of the above on and off (Everything turns all on).
 
 This only sees what Instagram shows publicly about public accounts. Who someone follows, what they like or
 comment on elsewhere, DMs and activity times are not exposed and are not tracked.
@@ -24,14 +24,13 @@ How it stays polite (instagrapi Best Practices: small list, minutes apart, remem
   took it (or it was queued for the digest).
 * Rate limits pause every check for THROTTLE_PAUSE and tell you once. An account that turns private or vanishes
   is removed and you are told.
-* Alerts can be held during quiet hours or batched into a daily digest (Settings -> Notifications).
 """
 import asyncio
 import hashlib
 import random
 import time
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import requests
@@ -50,7 +49,6 @@ log = get_logger("watcher")
 
 # pace -> (default seconds between checks of one account, random pause between two accounts)
 PACES = {"safe": (1200, (10.0, 20.0)), "normal": (600, (6.0, 14.0)), "fast": (300, (4.0, 8.0))}
-INTERVALS = (0, 300, 600, 1800, 3600)   # per-account override in seconds; 0 = follow the pace
 TICK = 60                      # how often the loop wakes up to see what is due
 MAX_WATCH = 10                 # accounts per Instagram login
 MAX_NEW_PER_CHECK = 5          # items sent per account per check; the rest are marked seen and summarised
@@ -58,9 +56,7 @@ THROTTLE_PAUSE = 900           # seconds to stop everything after a rate limit
 CHECK_NOW_GAP = 120            # seconds between two manual "check now" presses
 SEEN_CAP = 300                 # remembered ids per list
 TRACK_POSTS = 12               # recent posts followed for edits / removals / milestones
-QUEUE_CAP = 300                # held-back alert lines
-MAX_KEYWORDS = 10
-STORE_KEY, QUEUE_KEY = "watchlist", "watch_queue"
+STORE_KEY = "watchlist"
 PREFIX = "watch"
 
 LIKE_MS = (100, 500, 1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000)
@@ -87,7 +83,7 @@ BASELINES = {"posts": "seen_posts", "stories": "seen_stories", "profile": "snap"
 
 def new_entry(pk: str, flags: set[str]) -> dict:
     entry = {
-        "pk": str(pk), "only": "all", "keywords": [], "paused": False, "interval": 0,
+        "pk": str(pk), "paused": False, "interval": 0,
         "last": 0.0, "next": 0.0, "added": datetime.now(timezone.utc).isoformat(),
         "seen_posts": None, "seen_stories": None, "snap": None, "hl": None, "tracked": None,
     }
@@ -146,8 +142,6 @@ class WatcherModule(BaseModule):
     def __init__(self, ctx):
         super().__init__(ctx)
         self._watch: dict[str, dict] = {}
-        self._queue: list[str] = []          # alert lines held back (quiet hours / daily digest)
-        self._digest_day = ""
         self._lock = asyncio.Lock()          # guards the watchlist and its saved copy
         self._check_lock = asyncio.Lock()    # one check pass at a time
         self._task: asyncio.Task | None = None
@@ -177,9 +171,6 @@ class WatcherModule(BaseModule):
     async def on_start(self) -> None:
         saved = await self.ctx.store.get(STORE_KEY, {}) or {}
         self._watch = {u: normalize(e) for u, e in saved.items()}
-        queue = await self.ctx.store.get(QUEUE_KEY, {}) or {}
-        self._queue = list(queue.get("items", []))
-        self._digest_day = queue.get("digest_day", "")
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
         log.info("Watcher started with %d account(s)", len(self._watch))
@@ -208,9 +199,6 @@ class WatcherModule(BaseModule):
     async def _save(self) -> None:
         await self.ctx.store.set(STORE_KEY, self._watch)
 
-    async def _save_queue(self) -> None:
-        await self.ctx.store.set(QUEUE_KEY, {"items": self._queue, "digest_day": self._digest_day})
-
     async def _ig(self, fn):
         if not self.ctx.ig.logged_in:
             raise RuntimeError("Instagram is not logged in. Send /relogin.")
@@ -235,29 +223,13 @@ class WatcherModule(BaseModule):
         except Exception:
             return f"❌ {esc(type(e).__name__)}: {esc(str(e))}"
 
-    # ------------------------------------------------------------------ where alerts go, and when
-    def _local_now(self) -> datetime:
-        prefs = getattr(self.ctx, "prefs", None)
-        hours = prefs.tz_hours(self.ctx.cfg) if prefs else 0.0
-        return datetime.now(timezone.utc) + timedelta(hours=hours)
-
-    def _quiet_now(self) -> bool:
-        if not self._pref("quiet"):
-            return False
-        start, end, hour = self._pref("quiet_start"), self._pref("quiet_end"), self._local_now().hour
-        if start == end:
-            return False
-        return start <= hour < end if start < end else (hour >= start or hour < end)
-
-    def _deferring(self) -> bool:
-        return self._pref("digest") == "daily" or self._quiet_now()
-
+    # ------------------------------------------------------------------ where alerts go
     def _chats(self) -> list[int]:
+        """Alerts go to your private chat with the bot, or to the forum group if you chose that."""
         admin, group = self.ctx.cfg.tg_admin_id, self.ctx.bridge.chat_id
-        chats = [group] if self._pref("alerts_to") == "group" and group else []
-        if admin:
-            chats.append(admin)
-        return chats or ([group] if group else [])
+        if self._pref("alerts_to") == "group" and group:
+            return [group]
+        return [admin] if admin else ([group] if group else [])
 
     async def _send_text(self, text: str) -> bool:
         bot = self.ctx.bridge.bot
@@ -271,50 +243,10 @@ class WatcherModule(BaseModule):
                 log.warning("Could not send a watcher message to %s: %s", chat, e)
         return False
 
-    async def _enqueue(self, line: str) -> None:
-        self._queue = (self._queue + [line])[-QUEUE_CAP:]
-        await self._save_queue()
-
-    async def _text(self, html: str, line: str | None = None) -> bool:
-        """A text alert: sent now, or held for the digest / until quiet hours end."""
-        if self._deferring():
-            await self._enqueue(line or html)
-            return True
-        return await self._send_text(html)
-
     async def _alert_once(self, key: str, text: str) -> None:
         if key not in self._alerted:
             self._alerted.add(key)
             await self._send_text(text)
-
-    async def _flush_queue(self) -> None:
-        if not self._queue or self._quiet_now():
-            return
-        if self._pref("digest") == "daily":
-            now = self._local_now()
-            today = now.date().isoformat()
-            if now.hour < int(self._pref("digest_hour")) or self._digest_day == today:
-                return
-            header = "📰 <b>Daily digest</b>"
-        else:
-            today, header = None, "🌙 <b>Held back while alerts were quiet</b>"
-        lines, chunk, size = list(self._queue), [], 0
-        parts: list[str] = []
-        for line in lines:
-            if size + len(line) > 3500:
-                parts.append("\n\n".join(chunk))
-                chunk, size = [], 0
-            chunk.append(line)
-            size += len(line) + 2
-        if chunk:
-            parts.append("\n\n".join(chunk))
-        for i, part in enumerate(parts):
-            if not await self._send_text(f"{header}\n\n{part}" if i == 0 else part):
-                return  # Telegram not reachable: keep the queue and retry on the next tick
-        self._queue = []
-        if today:
-            self._digest_day = today
-        await self._save_queue()
 
     # ------------------------------------------------------------------ the loop
     async def _wait(self, seconds: float) -> None:
@@ -337,7 +269,6 @@ class WatcherModule(BaseModule):
             await self._wait(TICK)
 
     async def _tick(self) -> None:
-        await self._flush_queue()
         if time.time() < self._paused_until:
             return
         force, self._force = self._force, False
@@ -425,24 +356,13 @@ class WatcherModule(BaseModule):
             await self._highlights(username, entry)
 
     # ---- new posts and reels
-    @staticmethod
-    def _skip(entry: dict, m, label: str) -> bool:
-        if (entry["only"] == "posts" and label == "reel") or (entry["only"] == "reels" and label == "post"):
-            return True
-        words = entry["keywords"]
-        text = (getattr(m, "caption_text", "") or "").lower()
-        return bool(words) and not any(w in text for w in words)
-
     async def _announce(self, username: str, m, label: str) -> bool:
-        """Deliver one new post/reel/story: media now, or a link line when alerts are being held. False = retry later."""
+        """Deliver one new post/reel/story with its media. False = retry on the next check."""
         if label == "story":
             link = f"https://www.instagram.com/stories/{username}/{m.pk}/"
         else:
             link = f"https://www.instagram.com/p/{m.code}/" if getattr(m, "code", None) else f"https://www.instagram.com/{username}/"
         header = f"🔔 <b>@{esc(username)}</b> · new {label}\n"
-        if self._deferring():
-            await self._enqueue(f"{header}{link}")
-            return True
         bot, chats = self.ctx.bridge.bot, self._chats()
         if not bot or not chats:
             return False
@@ -463,9 +383,6 @@ class WatcherModule(BaseModule):
         done: list[str] = []
         for m in to_send:
             label = "reel" if getattr(m, "product_type", "") == "clips" else kind
-            if kind == "post" and self._skip(entry, m, label):
-                done.append(str(m.pk))
-                continue
             if not await self._announce(username, m, label):
                 break
             done.append(str(m.pk))
@@ -473,7 +390,7 @@ class WatcherModule(BaseModule):
             if extra:
                 done += [str(m.pk) for m in extra]
                 tail = "posts" if kind == "post" else "stories"
-                await self._text(f"🔔 <b>@{esc(username)}</b> · {len(extra)} more new {kind}(s) not shown. Use /{tail} {esc(username)}.")
+                await self._send_text(f"🔔 <b>@{esc(username)}</b> · {len(extra)} more new {kind}(s) not shown. Use /{tail} {esc(username)}.")
         if done:
             entry[key] = _remember(entry[key], done)
 
@@ -536,7 +453,7 @@ class WatcherModule(BaseModule):
                 st["lm"], st["cm"] = max(st["lm"], old[pk]["lm"]), max(st["cm"], old[pk]["cm"])
         entry["tracked"] = dict(sorted(merged.items(), key=lambda kv: kv[1]["ts"], reverse=True)[:TRACK_POSTS])
         for line in lines:
-            await self._text(line)
+            await self._send_text(line)
 
     # ---- profile changes, follower milestones
     async def _profile_changes(self, username: str, entry: dict) -> None:
@@ -572,8 +489,8 @@ class WatcherModule(BaseModule):
             if pic_changed:
                 changes.append("Profile picture changed")
             if changes:
-                await self._text(f"👤 {tag} · profile updated\n" + "\n".join(f"• {c}" for c in changes))
-                if pic_changed and not self._deferring():
+                await self._send_text(f"👤 {tag} · profile updated\n" + "\n".join(f"• {c}" for c in changes))
+                if pic_changed:
                     data = await self._fetch(str(pic)) if pic else None
                     bot, chats = self.ctx.bridge.bot, self._chats()
                     if data and bot and chats:
@@ -582,7 +499,7 @@ class WatcherModule(BaseModule):
                         except TelegramError as e:
                             log.info("Could not send the new profile picture: %s", e)
         if entry["engagement"] and snap["fm"] > old.get("fm", 0):
-            await self._text(f"🎉 {tag} · reached {FOLLOWER_MS[snap['fm'] - 1]:,} followers ({snap['f']:,} now)")
+            await self._send_text(f"🎉 {tag} · reached {FOLLOWER_MS[snap['fm'] - 1]:,} followers ({snap['f']:,} now)")
 
     # ---- highlights
     async def _highlights(self, username: str, entry: dict) -> None:
@@ -595,9 +512,9 @@ class WatcherModule(BaseModule):
             return
         for pk, count in now_counts.items():
             if pk not in old:
-                await self._text(f"⭐ <b>@{esc(username)}</b> · new highlight “{esc(titles[pk])}” ({count} items)")
+                await self._send_text(f"⭐ <b>@{esc(username)}</b> · new highlight “{esc(titles[pk])}” ({count} items)")
             elif count > old[pk]:
-                await self._text(f"⭐ <b>@{esc(username)}</b> · “{esc(titles[pk])}” got {count - old[pk]} new item(s)")
+                await self._send_text(f"⭐ <b>@{esc(username)}</b> · “{esc(titles[pk])}” got {count - old[pk]} new item(s)")
 
     # ------------------------------------------------------------------ adding, changing, removing
     async def add_account(self, username: str, flags: set[str]) -> tuple[bool, str]:
@@ -666,7 +583,7 @@ class WatcherModule(BaseModule):
         return {
             "accounts": len(self._watch), "paused": sum(1 for e in self._watch.values() if e["paused"]),
             "last_check": self._last_check, "paused_until": self._paused_until,
-            "queued": len(self._queue), "errors": list(self.errors),
+            "errors": list(self.errors),
         }
 
     # ------------------------------------------------------------------ commands
@@ -707,7 +624,7 @@ class WatcherModule(BaseModule):
         text, markup = self.list_view()
         await update.effective_message.reply_text(text, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
 
-    # ------------------------------------------------------------------ typing flows (add account, keywords)
+    # ------------------------------------------------------------------ typing flow (add account)
     async def on_text(self, text: str, update) -> bool:
         message = update.effective_message
         chat_id = message.chat_id
@@ -729,12 +646,6 @@ class WatcherModule(BaseModule):
             if ok:
                 view, markup = self._account_view(target)
                 await message.reply_text(view, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
-        elif what == "kw" and username in self._watch:
-            words = [w.strip().lower() for w in text.replace("\n", ",").split(",") if w.strip()]
-            words = [w[:30] for w in words][:MAX_KEYWORDS]
-            await self.update_entry(username, keywords=words)
-            view, markup = self._account_view(username)
-            await message.reply_text(view, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
         return True
 
     # ------------------------------------------------------------------ screens
@@ -747,24 +658,23 @@ class WatcherModule(BaseModule):
         return InlineKeyboardButton(f"[{label}]" if current else label, callback_data=data)
 
     def list_view(self, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
-        interval, _gap = self._pace()
-        pace, to, digest = self._pref("pace"), self._pref("alerts_to"), self._pref("digest")
-        mode = f"daily digest at {int(self._pref('digest_hour')):02d}:00" if digest == "daily" else "instant"
-        lines = [f"<b>Watchlist</b>  {len(self._watch)}/{MAX_WATCH}", ""]
+        """The accounts being watched, with the actions that apply to the whole list."""
+        to = self._pref("alerts_to")
+        lines = [f"<b>Watchlist</b>  {len(self._watch)} of {MAX_WATCH}", ""]
         if notice:
             lines = [notice, ""] + lines
         if not self._watch:
-            lines.append("Nothing watched yet. Tap Add account, or send /watch username.")
+            lines.append("No accounts yet. Tap Add account, or send /watch username.")
+        else:
+            lines.append("Tap an account to choose what to watch on it.")
+            lines.append("")
         for user, entry in self._watch.items():
             lines.append(f"@{esc(user)}: {summary(entry)}" + (" (paused)" if entry["paused"] else ""))
-        lines += [
-            "",
-            f"Pace: {pace} (about every {interval // 60} min), last pass {_ago(self._last_check)}",
-            f"Alerts to: {'forum group' if to == 'group' else 'this chat'}",
-            f"Mode: {mode}" + (", quiet hours on" if self._pref("quiet") else ""),
-        ]
+        lines += ["", f"Alerts are sent to: {'the forum group' if to == 'group' else 'this chat'}"]
+        if self._watch:
+            lines.append(f"Last check: {_ago(self._last_check)}")
         if time.time() < self._paused_until:
-            lines.append("Paused after an Instagram rate limit; resumes on its own.")
+            lines.append("Paused after an Instagram rate limit; it resumes on its own.")
         rows = self._row([InlineKeyboardButton(f"@{u}"[:24], callback_data=f"m:{PREFIX}:ac:{u}") for u in self._watch])
         all_paused = bool(self._watch) and all(e["paused"] for e in self._watch.values())
         rows.append([
@@ -772,63 +682,30 @@ class WatcherModule(BaseModule):
             InlineKeyboardButton("Check now", callback_data=f"m:{PREFIX}:now:-"),
             InlineKeyboardButton("Resume all" if all_paused else "Pause all", callback_data=f"m:{PREFIX}:pa:-"),
         ])
-        rows.append([self._opt(p.title(), p == pace, f"m:{PREFIX}:cfg:pace:{p}") for p in PACES])
-        rows.append([self._opt("This chat", to != "group", f"m:{PREFIX}:cfg:to:dm"),
-                     self._opt("Group", to == "group", f"m:{PREFIX}:cfg:to:group"),
-                     self._opt("Instant", digest != "daily", f"m:{PREFIX}:cfg:dg:instant"),
-                     self._opt("Daily digest", digest == "daily", f"m:{PREFIX}:cfg:dg:daily")])
-        rows.append([InlineKeyboardButton("Quiet hours and digest time", callback_data=f"m:{PREFIX}:al:-"),
-                     InlineKeyboardButton("Back", callback_data="nav:settings")])
+        rows.append([
+            InlineKeyboardButton(f"Alerts to: {'forum group' if to == 'group' else 'this chat'}", callback_data=f"m:{PREFIX}:to:-"),
+            InlineKeyboardButton("Back", callback_data="nav:settings"),
+        ])
         return "\n".join(lines), InlineKeyboardMarkup(rows)
-
-    def alerts_view(self) -> tuple[str, InlineKeyboardMarkup]:
-        quiet = bool(self._pref("quiet"))
-        qs, qe, dh = int(self._pref("quiet_start")), int(self._pref("quiet_end")), int(self._pref("digest_hour"))
-        tz = self.ctx.prefs.tz_hours(self.ctx.cfg) if getattr(self.ctx, "prefs", None) else 0
-        text = (
-            "<b>Alert timing</b>\n\n"
-            f"Quiet hours: {'on' if quiet else 'off'}, {qs:02d}:00 to {qe:02d}:00. Alerts are held and sent afterwards as one message.\n"
-            f"Daily digest time: {dh:02d}:00\n"
-            f"Timezone: UTC{tz:+g}"
-        )
-        rows = [
-            [self._opt("Quiet on", quiet, f"m:{PREFIX}:aq:1"), self._opt("Quiet off", not quiet, f"m:{PREFIX}:aq:0")],
-            [InlineKeyboardButton("Start -1h", callback_data=f"m:{PREFIX}:aqs:-1"),
-             InlineKeyboardButton("Start +1h", callback_data=f"m:{PREFIX}:aqs:1"),
-             InlineKeyboardButton("End -1h", callback_data=f"m:{PREFIX}:aqe:-1"),
-             InlineKeyboardButton("End +1h", callback_data=f"m:{PREFIX}:aqe:1")],
-            [InlineKeyboardButton("Digest -1h", callback_data=f"m:{PREFIX}:adh:-1"),
-             InlineKeyboardButton("Digest +1h", callback_data=f"m:{PREFIX}:adh:1"),
-             InlineKeyboardButton("Back", callback_data=f"m:{PREFIX}:ls:-")],
-        ]
-        return text, InlineKeyboardMarkup(rows)
 
     def _account_view(self, username: str) -> tuple[str, InlineKeyboardMarkup]:
         entry = self._watch.get(username)
         back = InlineKeyboardButton("Watchlist", callback_data=f"m:{PREFIX}:ls:-")
         if not entry:
             return "That account is not on the watchlist.", InlineKeyboardMarkup([[back]])
-        every = f"{entry['interval'] // 60} min" if entry["interval"] else f"default ({self._pace()[0] // 60} min)"
-        words = ", ".join(entry["keywords"]) or "none"
         text = (
             f"<b>@{esc(username)}</b>{' (paused)' if entry['paused'] else ''}\n\n"
             f"Watching: {summary(entry)}\n"
-            f"Check every: {every}, last check {_ago(entry['last'])}\n"
-            f"Alerts for: {entry['only']}, keywords: {esc(words)}\n\n"
-            "Turning a feature on starts from now."
+            f"Last check: {_ago(entry['last'])}\n\n"
+            "Tap to switch each one on or off. Turning one on starts from now."
         )
         toggles = [
             InlineKeyboardButton(f"{name}: {'on' if entry[key] else 'off'}", callback_data=f"m:{PREFIX}:t:{code}:{username}")
             for code, (key, name, _short) in FLAGS.items()
         ]
-        rows = self._row(toggles, 2)
+        rows = self._row(toggles, 3)
+        rows.append([InlineKeyboardButton("Everything", callback_data=f"m:{PREFIX}:ev:{username}")])
         rows.append([
-            InlineKeyboardButton(f"Every: {every.split(' (')[0]}", callback_data=f"m:{PREFIX}:iv:{username}"),
-            InlineKeyboardButton(f"Only: {entry['only']}", callback_data=f"m:{PREFIX}:on:{username}"),
-            InlineKeyboardButton(f"Keywords ({len(entry['keywords'])})", callback_data=f"m:{PREFIX}:kw:{username}"),
-        ])
-        rows.append([
-            InlineKeyboardButton("Clear keywords", callback_data=f"m:{PREFIX}:kx:{username}"),
             InlineKeyboardButton("Resume" if entry["paused"] else "Pause", callback_data=f"m:{PREFIX}:pz:{username}"),
             InlineKeyboardButton("Remove", callback_data=f"m:{PREFIX}:rm:{username}"),
         ])
@@ -844,12 +721,14 @@ class WatcherModule(BaseModule):
     async def on_button(self, rest: str, query, context) -> None:
         act, _, arg = rest.partition(":")
         message = query.message
-        prefs = getattr(self.ctx, "prefs", None)
         if act == "ls":
             await self._show(query, *self.list_view())
             return
-        if act == "al":
-            await self._show(query, *self.alerts_view())
+        if act == "to":
+            prefs = getattr(self.ctx, "prefs", None)
+            if prefs:
+                await prefs.set("alerts_to", "dm" if prefs.get("alerts_to") == "group" else "group")
+            await self._show(query, *self.list_view())
             return
         if act == "add":
             self._awaiting[message.chat_id] = ("add", "")
@@ -867,21 +746,6 @@ class WatcherModule(BaseModule):
                 await self._save()
             await self._show(query, *self.list_view())
             return
-        if act == "cfg" and prefs:
-            key, _, value = arg.partition(":")
-            real = {"pace": "pace", "to": "alerts_to", "dg": "digest"}.get(key)
-            if real:
-                await prefs.set(real, value)
-            await self._show(query, *self.list_view())
-            return
-        if act in ("aq", "aqs", "aqe", "adh") and prefs:
-            if act == "aq":
-                await prefs.set("quiet", arg == "1")
-            else:
-                key = {"aqs": "quiet_start", "aqe": "quiet_end", "adh": "digest_hour"}[act]
-                await prefs.set(key, (int(prefs.get(key)) + int(arg)) % 24)
-            await self._show(query, *self.alerts_view())
-            return
         if act == "t":  # t:<code>:<user>
             code, _, username = arg.partition(":")
             await self.toggle_flag(username, code)
@@ -891,22 +755,13 @@ class WatcherModule(BaseModule):
         entry = self._watch.get(username)
         if act == "ac":
             await self._show(query, *self._account_view(username))
-        elif act == "iv" and entry:
-            nxt = INTERVALS[(INTERVALS.index(entry["interval"]) + 1) % len(INTERVALS)] if entry["interval"] in INTERVALS else 0
-            await self.update_entry(username, interval=nxt, next=0.0)
-            await self._show(query, *self._account_view(username))
-        elif act == "on" and entry:
-            order = ("all", "posts", "reels")
-            await self.update_entry(username, only=order[(order.index(entry["only"]) + 1) % 3])
-            await self._show(query, *self._account_view(username))
-        elif act == "kw" and entry:
-            self._awaiting[message.chat_id] = ("kw", username)
-            await message.reply_text(
-                f"Send the keywords for @{username}, separated by commas. New posts are announced only if the caption contains "
-                "one of them. Send cancel to leave it as it is."
-            )
-        elif act == "kx" and entry:
-            await self.update_entry(username, keywords=[])
+        elif act == "ev" and entry:
+            for code, (key, _name, _short) in FLAGS.items():
+                if not entry[key]:
+                    entry[key] = True
+                    entry[BASELINES[key]] = None   # starts from now, silently
+            async with self._lock:
+                await self._save()
             await self._show(query, *self._account_view(username))
         elif act == "pz" and entry:
             await self.update_entry(username, paused=not entry["paused"])
