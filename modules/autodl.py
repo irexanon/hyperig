@@ -132,6 +132,8 @@ def _find_url(node, keys: tuple[str, ...], depth: int = 0, seen: set[int] | None
 
 class AutoDownloadModule(BaseModule):
     name = "autodl"
+    toggleable = True
+    label = "Link downloader (paste a link or /dl)"
     description = "Auto-detect Instagram links and download media to Telegram"
 
     def __init__(self, ctx):
@@ -407,7 +409,7 @@ class AutoDownloadModule(BaseModule):
                     await status.edit_text(f"✅ Sent {sent} media file(s).")
                 except TelegramError:
                     pass
-                if result["is_reel"] and not audio:
+                if result["is_reel"] and not audio and self.ctx.prefs.get("dl_audio", True):
                     markup = InlineKeyboardMarkup(
                         [[InlineKeyboardButton("🎵 Download original audio", callback_data=f"m:autodl:a:{result['pk']}")]]
                     )

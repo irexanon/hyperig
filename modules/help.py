@@ -24,8 +24,9 @@ class HelpModule(BaseModule):
         for name, (cmd, module) in commands.items():
             groups.setdefault(module.name, []).append(f"/{name} - {cmd.description}")
         lines = ["🚀 Hyper Insta commands", ""]
+        off = {m.name for m in manager.modules if not manager.is_enabled(m)}
         for module_name, items in groups.items():
-            lines.append(module_name.upper())
+            lines.append(module_name.upper() + (" (OFF in Settings)" if module_name in off else ""))
             lines.extend(items)
             lines.append("")
         lines.append("Reply inside a chat topic to answer that Instagram conversation.")
