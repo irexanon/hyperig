@@ -13,7 +13,7 @@ PACE_INFO = {
 SIZES = (10, 20, 35, 50)
 
 
-def _back(to="nav:settings", label="⬅️ Settings"):
+def _back(to="pn:home", label="⬅️ Watch Settings"):
     return [Btn(label, callback_data=to)]
 
 
@@ -85,10 +85,11 @@ def view_for(ws, name: str, notice: str = ""):
         return head + "\n".join(lines), Markup([[Btn("🔄 Refresh", callback_data="pn:hl")], _back()])
     # home
     return (
-        f"{head}<b>⚙️ More settings</b>\n\nFeatures, downloads, notifications, safety and health for @{slot.ig_username}.",
-        Markup([[Btn("🧩 Features", callback_data="pn:ft"), Btn("📥 Downloads", callback_data="pn:dl")],
-                [Btn("🔔 Notifications", callback_data="pn:nt"), Btn("🛡 Safety", callback_data="pn:sf")],
-                [Btn("🩺 Health", callback_data="pn:hl")], _back()]),
+        f"{head}<b>👁 Watch Settings</b>\n\nWhat to watch, which features are on, and how alerts and pacing behave for @{slot.ig_username}.",
+        Markup([[Btn("👁 Watchlist (what to watch)", callback_data="nav:watch")],
+                [Btn("🧩 Features on/off", callback_data="pn:ft"), Btn("🔔 Notifications", callback_data="pn:nt")],
+                [Btn("🛡 Safety / pace", callback_data="pn:sf"), Btn("📥 Downloads", callback_data="pn:dl")],
+                [Btn("🩺 Health", callback_data="pn:hl")], _back("nav:settings", "⬅️ Settings")]),
     )
 
 

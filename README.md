@@ -95,10 +95,16 @@ comment on elsewhere, online status and activity-time patterns are not exposed a
 
 ## Settings
 
-`/settings` (or the Settings button) has the bridge controls plus: **Watchlist**, **Features** (switch the
-profile tools, link downloader and watcher on or off), **Downloads** (largest file, audio button),
-**Notifications** (where alerts go, quiet hours, daily digest, timezone), **Safety** (watcher pace: safe /
-normal / fast) and **Health** (login state, last watcher pass, recent errors). These are saved per Instagram account.
+`/settings` has three sections:
+
+- **Manage Accounts**: the Instagram accounts. Each account screen has login/relogin, Realtime and FBNS switches,
+  session download, Logout and Remove (both ask for confirmation).
+- **Bridge Settings**: DM bridge on/off, which account is bridged, the forum group.
+- **Watch Settings**: Watchlist (what to watch), Features on/off (profile tools, link downloader, watcher),
+  Notifications (where alerts go, quiet hours, daily digest, timezone), Safety (watcher pace), Downloads (largest
+  file, audio button) and Health (login state, last watcher pass, recent errors). Saved per Instagram account.
+
+`/start` shows a plain status message with no buttons. `/logout` asks before signing out.
 
 ## Instagram link downloader
 
@@ -127,7 +133,7 @@ listed in Telegram's slash-command suggestions; group linking can be configured 
 manually inside the Forum Group by an admin).
 
 The web dashboard has a matching **Settings** panel for the bridge toggle, attached account and account
-management. Bridge state is saved in the workspace profile and survives a restart.
+management. Bridge state is saved with your login and survives a restart.
 
 ## Realtime delivery (MQTT + FBNS)
 Both channels are instagrapi's own (`cl.realtime_*`, `cl.fbns_*`), enabled by default:

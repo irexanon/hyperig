@@ -47,7 +47,7 @@ class _TokenHub:
     """Manages a python-telegram-bot Application instance for a bot token.
 
     Handles:
-    - Private DM onboarding (/start -> Register or Login to a User Workspace)
+    - Private DM onboarding (/start -> Register or Login)
     - Private DM interactive control panel (Select/Attach IG account to bridge, Login IG via Password/Cookie,
       Toggle Realtime & FBNS, Set Group Chat ID, Download Session JSON, Run Commands)
     - Forum Group topic routing for the attached Instagram account.
@@ -114,17 +114,15 @@ class _TokenHub:
         if not self._commands_published:
             try:
                 base_cmds = [
-                    BotCommand("start", "Open dashboard and status"),
-                    BotCommand("settings", "Bridge, accounts and watch settings"),
-                    BotCommand("accounts", "Manage Instagram accounts"),
+                    BotCommand("start", "Status and what this bot does"),
                     BotCommand("status", "Show connection status"),
-                    BotCommand("watch", "Watch an account's new activity"),
-                    BotCommand("unwatch", "Stop watching an account"),
-                    BotCommand("watchlist", "Manage watched accounts"),
-                    BotCommand("dump", "Open a public profile with action buttons"),
-                    BotCommand("dl", "Download an Instagram link"),
                     BotCommand("profile", "Public profile info"),
-                    BotCommand("logout", "Sign out of workspace"),
+                    BotCommand("dl", "Download an Instagram link"),
+                    BotCommand("watch", "Watch an account's new activity"),
+                    BotCommand("dump", "Open a public profile with action buttons"),
+                    BotCommand("settings", "Accounts, bridge and watch settings"),
+                    BotCommand("help", "List all commands"),
+                    BotCommand("logout", "Sign out"),
                 ]
                 await self.bot.set_my_commands(base_cmds)
                 self._commands_published = True
@@ -249,7 +247,7 @@ class _TokenHub:
         text = (
             f"{head}"
             "<b>Hyper Insta Bridge</b>\n"
-            "Sign in to your workspace or create a new one."
+            "Sign in, or create a new login."
         )
         rows = [
             [
@@ -271,34 +269,16 @@ class _TokenHub:
 
         head = f"{notice}\n\n" if notice else ""
         text = (
-            f"{head}<b>Hyper Insta</b> · Workspace dashboard\n\n"
-            f"👤 <b>Workspace:</b> <code>{ws.username}</code>\n"
+            f"{head}<b>Hyper Insta</b>\n\n"
+            f"👤 <b>Logged in as:</b> <code>{ws.username}</code>\n"
             f"📸 <b>Instagram:</b> {ig_str}\n"
             f"🔁 <b>DM bridge:</b> {bridge_state}\n"
             f"💬 <b>Telegram group:</b> {group_str}\n\n"
-            "<i>Forward Instagram DMs to Telegram forum topics, manage multiple accounts, "
-            "watch public-account updates, and download Instagram media. Use Settings to control routing.</i>"
+            "<i>Bridges Instagram DMs to Telegram, downloads media from links, shows public profiles "
+            "and watches public accounts for new activity.</i>\n\n"
+            "Commands: /status /profile /dl /watch /dump /settings /help /logout"
         )
-        count = len(ws.slots)
-        rows = [
-            [
-                InlineKeyboardButton(f"📸 Accounts ({count})", callback_data="nav:accounts"),
-                InlineKeyboardButton("➕ Add Instagram", callback_data="nav:add_ig"),
-            ],
-            [
-                InlineKeyboardButton("⚙️ Settings", callback_data="nav:settings"),
-                InlineKeyboardButton("👁 Watchlist", callback_data="nav:watch"),
-            ],
-            [
-                InlineKeyboardButton("📊 Status", callback_data="nav:status"),
-                InlineKeyboardButton("💬 Group Routing", callback_data="nav:group"),
-            ],
-            [
-                InlineKeyboardButton("🔄 Refresh", callback_data="nav:home"),
-                InlineKeyboardButton("🚪 Sign Out", callback_data="auth:logout"),
-            ],
-        ]
-        return text, InlineKeyboardMarkup(rows)
+        return text, None
 
     def _view_accounts(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         head = f"{notice}\n\n" if notice else ""
@@ -331,7 +311,7 @@ class _TokenHub:
         rows.append(
             [
                 InlineKeyboardButton("➕ Add IG", callback_data="nav:add_ig"),
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+                InlineKeyboardButton("⬅️ Back", callback_data="nav:settings"),
             ]
         )
         return text, InlineKeyboardMarkup(rows)
@@ -372,9 +352,10 @@ class _TokenHub:
                 InlineKeyboardButton("📥 Session .json", callback_data=f"acct:dl:{ig_u}"),
             ],
             [
-                InlineKeyboardButton("🗑 Logout IG", callback_data=f"acct:logout:{ig_u}"),
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:accounts"),
+                InlineKeyboardButton("🚪 Logout IG", callback_data=f"acct:logout:{ig_u}"),
+                InlineKeyboardButton("🗑 Remove account", callback_data=f"acct:rm:{ig_u}"),
             ],
+            [InlineKeyboardButton("⬅️ Back", callback_data="nav:accounts")],
         ]
         return text, InlineKeyboardMarkup(rows)
 
@@ -391,7 +372,7 @@ class _TokenHub:
                 InlineKeyboardButton("🍪 Cookie Login", callback_data="add:ck"),
             ],
             [
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+                InlineKeyboardButton("⬅️ Back", callback_data="nav:settings"),
             ],
         ]
         return text, InlineKeyboardMarkup(rows)
@@ -402,7 +383,7 @@ class _TokenHub:
         lines = [
             "<b>Bridge Status</b>",
             "",
-            f"👤 <b>Workspace:</b> <code>{ws.username}</code>",
+            f"👤 <b>Logged in as:</b> <code>{ws.username}</code>",
             f"💬 <b>Forum Group:</b> {group_str}",
         ]
         if slot:
@@ -427,50 +408,46 @@ class _TokenHub:
                 InlineKeyboardButton("🔄 Refresh", callback_data="nav:status"),
                 InlineKeyboardButton("⚙️ Settings", callback_data="nav:settings"),
             ],
-            [InlineKeyboardButton("⬅️ Dashboard", callback_data="nav:home")],
+            [InlineKeyboardButton("⬅️ Settings", callback_data="nav:settings")],
         ]
         return "\n".join(lines), InlineKeyboardMarkup(rows)
 
     def _view_settings(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
+        head = f"{notice}\n\n" if notice else ""
+        text = (
+            f"{head}<b>⚙️ Settings</b>\n\n"
+            f"📸 <b>Manage Accounts</b> · {len(ws.slots)} Instagram account(s); login, Realtime/FBNS, remove\n"
+            f"🌉 <b>Bridge Settings</b> · DM bridge on/off, bridged account, forum group\n"
+            f"👁 <b>Watch Settings</b> · what to watch, features on/off, alerts, pace, downloads, health"
+        )
+        rows = [
+            [InlineKeyboardButton("📸 Manage Accounts", callback_data="nav:accounts")],
+            [InlineKeyboardButton("🌉 Bridge Settings", callback_data="nav:bridge")],
+            [InlineKeyboardButton("👁 Watch Settings", callback_data="pn:home")],
+        ]
+        return text, InlineKeyboardMarkup(rows)
+
+    def _view_bridge(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         slot = ws.get_attached_slot() or ws.get_active_slot()
         enabled = bool(getattr(ws, "bridge_enabled", True))
         group = f"<code>{ws.tg_chat_id}</code>" if ws.tg_chat_id else "Not configured"
         attached = f"@{slot.ig_username}" if slot else "No account selected"
-        rt = "ON" if slot and slot.cfg.realtime else "OFF"
-        fbns = "ON" if slot and slot.cfg.fbns else "OFF"
         head = f"{notice}\n\n" if notice else ""
         text = (
-            f"{head}<b>⚙️ Settings &amp; Routing</b>\n\n"
+            f"{head}<b>🌉 Bridge Settings</b>\n\n"
             f"DM bridge: <b>{'🟢 Enabled' if enabled else '⏸ Paused'}</b>\n"
-            f"Attached account: <b>{attached}</b>\n"
-            f"Forum group: {group}\n"
-            f"Realtime MQTT: <b>{rt}</b> · FBNS: <b>{fbns}</b>\n\n"
-            "Choose the account that sends/receives bridged DMs. Pausing the bridge stops group routing; "
-            "it does not log Instagram out. Watch monitoring is configured separately from DM routing."
+            f"Bridged account: <b>{attached}</b>\n"
+            f"Forum group: {group}\n\n"
+            "Pausing the bridge stops group routing; it does not log Instagram out."
         )
         rows = [
             [InlineKeyboardButton(
-                "⏸ Pause DM Bridge" if enabled else "▶️ Enable DM Bridge",
-                callback_data="settings:bridge",
+                "⏸ Pause DM Bridge" if enabled else "▶️ Enable DM Bridge", callback_data="settings:bridge",
             )],
             [InlineKeyboardButton("🔀 Choose Bridged Account", callback_data="settings:choose_account")],
-        ]
-        if slot:
-            rows.append([
-                InlineKeyboardButton(f"⚡ Realtime: {rt}", callback_data=f"settings:rt:{slot.ig_username}"),
-                InlineKeyboardButton(f"🔔 FBNS: {fbns}", callback_data=f"settings:fbns:{slot.ig_username}"),
-            ])
-        rows.extend([
             [InlineKeyboardButton("💬 Configure Forum Group", callback_data="nav:group")],
-            [InlineKeyboardButton("👁 Watchlist", callback_data="nav:watch"),
-             InlineKeyboardButton("📸 Manage Accounts", callback_data="nav:accounts")],
-            [InlineKeyboardButton("🧩 Features", callback_data="pn:ft"),
-             InlineKeyboardButton("📥 Downloads", callback_data="pn:dl")],
-            [InlineKeyboardButton("🔔 Notifications", callback_data="pn:nt"),
-             InlineKeyboardButton("🛡 Safety", callback_data="pn:sf"),
-             InlineKeyboardButton("🩺 Health", callback_data="pn:hl")],
-            [InlineKeyboardButton("⬅️ Dashboard", callback_data="nav:home")],
-        ])
+            [InlineKeyboardButton("⬅️ Settings", callback_data="nav:settings")],
+        ]
         return text, InlineKeyboardMarkup(rows)
 
     def _view_settings_accounts(self, ws) -> tuple[str, InlineKeyboardMarkup]:
@@ -484,7 +461,7 @@ class _TokenHub:
                 callback_data=f"settings:attach:{ig_u}",
             )])
         rows.append([InlineKeyboardButton("➕ Add Instagram", callback_data="nav:add_ig"),
-                     InlineKeyboardButton("⬅️ Settings", callback_data="nav:settings")])
+                     InlineKeyboardButton("⬅️ Bridge", callback_data="nav:bridge")])
         return text, InlineKeyboardMarkup(rows)
 
     def _view_group(self, ws, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
@@ -500,13 +477,13 @@ class _TokenHub:
         rows = [
             [
                 InlineKeyboardButton("✏️ Enter Group ID", callback_data="group:set"),
-                InlineKeyboardButton("⬅️ Back", callback_data="nav:home"),
+                InlineKeyboardButton("⬅️ Back", callback_data="nav:bridge"),
             ]
         ]
         return text, InlineKeyboardMarkup(rows)
 
     @staticmethod
-    def _cancel_markup(target: str = "nav:home") -> InlineKeyboardMarkup:
+    def _cancel_markup(target: str = "nav:settings") -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data=target)]])
 
     # ------------------------------------------------- Callback Query Handler
@@ -530,8 +507,23 @@ class _TokenHub:
             await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
             return
 
-        if data in ("auth:register", "auth:login", "auth:logout"):
+        if data == "auth:logout_no":
+            ws0 = self._find_workspace_for_user(user_id)
+            if ws0:
+                text, markup = self._view_home(ws0)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+            return
+
+        if data in ("auth:register", "auth:login", "auth:logout", "auth:logout_ok"):
             if data == "auth:logout":
+                text = "🚪 <b>Sign out?</b>\n\nYou will need to log in again to use the bot."
+                markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Yes, sign out", callback_data="auth:logout_ok"),
+                    InlineKeyboardButton("Cancel", callback_data="auth:logout_no"),
+                ]])
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+            if data == "auth:logout_ok":
                 prev_ws = self._find_workspace_for_user(user_id)
                 if prev_ws:
                     await prev_ws.update_telegram({"tg_admin_id": "0"})
@@ -541,11 +533,11 @@ class _TokenHub:
 
             mode = "register" if data == "auth:register" else "login"
             self._chat_state[user_id] = {"step": "ws_user", "mode": mode}
-            title = "🆕 <b>Register Workspace</b>" if mode == "register" else "🔑 <b>Workspace Login</b>"
+            title = "🆕 <b>Create Login</b>" if mode == "register" else "🔑 <b>Login</b>"
             await self._show_panel(
                 chat_id,
                 user_id,
-                f"{title}\n\nSend your <b>workspace username</b>:",
+                f"{title}\n\nSend your <b>username</b>:",
                 self._cancel_markup("auth:cancel"),
                 edit_msg=query.message,
             )
@@ -596,6 +588,11 @@ class _TokenHub:
                 await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
+            if data == "nav:bridge":
+                text, markup = self._view_bridge(ws)
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
             if data == "nav:watch":
                 slot = ws.get_attached_slot() or ws.get_active_slot()
                 if slot:
@@ -632,7 +629,7 @@ class _TokenHub:
 
             if data == "settings:bridge":
                 await ws.set_bridge_enabled(not bool(getattr(ws, "bridge_enabled", True)))
-                text, markup = self._view_settings(ws, "Bridge updated.")
+                text, markup = self._view_bridge(ws, "Bridge updated.")
                 await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
@@ -640,27 +637,9 @@ class _TokenHub:
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 try:
                     await ws.attach_account(ig_u)
-                    text, markup = self._view_settings(ws, f"Attached @{ig_u} to the DM bridge.")
+                    text, markup = self._view_bridge(ws, f"Attached @{ig_u} to the DM bridge.")
                 except Exception as e:
-                    text, markup = self._view_settings(ws, f"Could not attach account: {e}")
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data.startswith("settings:rt:"):
-                ig_u = sanitize_username(data.split(":", 2)[2])
-                slot = ws.slots.get(ig_u)
-                if slot:
-                    await slot.apply_config({"realtime": not slot.cfg.realtime})
-                text, markup = self._view_settings(ws, "Realtime MQTT setting updated.")
-                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
-                return
-
-            if data.startswith("settings:fbns:"):
-                ig_u = sanitize_username(data.split(":", 2)[2])
-                slot = ws.slots.get(ig_u)
-                if slot:
-                    await slot.apply_config({"fbns": not slot.cfg.fbns})
-                text, markup = self._view_settings(ws, "FBNS setting updated.")
+                    text, markup = self._view_bridge(ws, f"Could not attach account: {e}")
                 await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
                 return
 
@@ -750,7 +729,30 @@ class _TokenHub:
                 )
                 return
 
-            if data.startswith("acct:logout:"):
+            if data.startswith(("acct:logout:", "acct:rm:")):
+                ig_u = sanitize_username(data.split(":", 2)[2])
+                removing = data.startswith("acct:rm:")
+                ask = (
+                    f"🗑 <b>Remove @{ig_u}?</b>\n\nIts saved session, topics and settings are deleted. You can add it again later."
+                    if removing else
+                    f"🚪 <b>Log out of @{ig_u}?</b>\n\nBridging and watching stop until you log in again."
+                )
+                ok_cb = f"acct:{'rmok' if removing else 'logoutok'}:{ig_u}"
+                markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Yes, " + ("remove" if removing else "log out"), callback_data=ok_cb),
+                    InlineKeyboardButton("Cancel", callback_data=f"acct:view:{ig_u}"),
+                ]])
+                await self._show_panel(chat_id, user_id, ask, markup, edit_msg=query.message)
+                return
+
+            if data.startswith("acct:rmok:"):
+                ig_u = sanitize_username(data.split(":", 2)[2])
+                await ws.remove_slot(ig_u)
+                text, markup = self._view_accounts(ws, notice=f"🗑 Removed @{ig_u}.")
+                await self._show_panel(chat_id, user_id, text, markup, edit_msg=query.message)
+                return
+
+            if data.startswith("acct:logoutok:"):
                 ig_u = sanitize_username(data.split(":", 2)[2])
                 slot = ws.slots.get(ig_u)
                 if slot:
@@ -782,7 +784,7 @@ class _TokenHub:
             if ws:
                 await ws.update_telegram({"tg_chat_id": str(chat.id), "tg_admin_id": str(user.id)})
                 await message.reply_text(
-                    f"✅ Linked this Forum Group (<code>{chat.id}</code>) to workspace <b>{ws.username}</b>.",
+                    f"✅ Linked this Forum Group (<code>{chat.id}</code>) to <b>{ws.username}</b>.",
                     parse_mode="HTML",
                 )
             else:
@@ -821,7 +823,7 @@ class _TokenHub:
         if mode == "register":
             if mgr.workspace_exists(uname):
                 self._chat_state.pop(user_id, None)
-                text, markup = self._view_welcome(f"❌ Workspace <b>{uname}</b> already exists. Tap <b>Login</b>.")
+                text, markup = self._view_welcome(f"❌ <b>{uname}</b> already exists. Tap <b>Login</b>.")
                 await self._show_panel(chat_id, user_id, text, markup)
                 return
             prev_ws = self._find_workspace_for_user(user_id)
@@ -830,7 +832,7 @@ class _TokenHub:
             ws = await mgr.register_workspace(uname, password)
             await ws.update_telegram({"tg_admin_id": str(user_id)})
             self._chat_state.pop(user_id, None)
-            text, markup = self._view_home(ws, notice=f"✅ Created workspace <b>{ws.username}</b>.")
+            text, markup = self._view_home(ws, notice=f"✅ Created login <b>{ws.username}</b>.")
             await self._show_panel(chat_id, user_id, text, markup)
         else:
             ws, err = await mgr.authenticate_workspace(uname, password)
@@ -872,12 +874,12 @@ class _TokenHub:
             mode = state.get("mode", "login")
             if mode == "register" and mgr.workspace_exists(uname):
                 self._chat_state.pop(user_id, None)
-                v_txt, markup = self._view_welcome(f"❌ Workspace <b>{uname}</b> already exists. Tap <b>Login</b>.")
+                v_txt, markup = self._view_welcome(f"❌ <b>{uname}</b> already exists. Tap <b>Login</b>.")
                 await self._show_panel(chat_id, user_id, v_txt, markup)
                 return
             if mode == "login" and not mgr.workspace_exists(uname):
                 self._chat_state.pop(user_id, None)
-                v_txt, markup = self._view_welcome(f"❌ Workspace <b>{uname}</b> not found. Tap <b>Register</b>.")
+                v_txt, markup = self._view_welcome(f"❌ <b>{uname}</b> not found. Tap <b>Register</b>.")
                 await self._show_panel(chat_id, user_id, v_txt, markup)
                 return
             self._chat_state[user_id] = {"step": "ws_pass", "mode": mode, "username": uname}
@@ -1056,9 +1058,14 @@ class _TokenHub:
                     return
 
                 if cmd_name == "logout":
-                    await ws.update_telegram({"tg_admin_id": "0"})
-                    v_txt, markup = self._view_welcome("✅ Signed out.")
-                    await self._show_panel(chat_id, user_id, v_txt, markup, force_new=True)
+                    markup = InlineKeyboardMarkup([[
+                        InlineKeyboardButton("Yes, sign out", callback_data="auth:logout_ok"),
+                        InlineKeyboardButton("Cancel", callback_data="auth:logout_no"),
+                    ]])
+                    await self._show_panel(
+                        chat_id, user_id,
+                        "🚪 <b>Sign out?</b>\n\nYou will need to log in again to use the bot.", markup, force_new=True,
+                    )
                     return
 
                 slot = ws.get_attached_slot() or ws.get_active_slot()

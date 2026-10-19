@@ -225,15 +225,15 @@ class WatcherModule(BaseModule):
 
     def _explain(self, e: Exception) -> str:
         if isinstance(e, RuntimeError):
-            return f"❌ {e}"
+            return f"❌ {esc(str(e))}"
         try:
             from instagrapi import exceptions as ig_exc
 
             if isinstance(e, (ig_exc.UserNotFound, ig_exc.ClientNotFoundError)):
                 return "❌ That account was not found."
-            return f"❌ {describe_error(e, self.ctx.ig.cl).text}"
+            return f"❌ {esc(describe_error(e, self.ctx.ig.cl).text)}"
         except Exception:
-            return f"❌ {type(e).__name__}: {e}"
+            return f"❌ {esc(type(e).__name__)}: {esc(str(e))}"
 
     # ------------------------------------------------------------------ where alerts go, and when
     def _local_now(self) -> datetime:
@@ -760,7 +760,7 @@ class WatcherModule(BaseModule):
              InlineKeyboardButton("🔄 Check now", callback_data=f"m:{PREFIX}:now:-")]
         )
         rows.append(
-            [InlineKeyboardButton("⬅️ Settings", callback_data="nav:settings"),
+            [InlineKeyboardButton("⬅️ Watch Settings", callback_data="pn:home"),
              InlineKeyboardButton("✖ Close", callback_data=f"m:{PREFIX}:x:-")]
         )
         return "\n".join(lines), InlineKeyboardMarkup(rows)
