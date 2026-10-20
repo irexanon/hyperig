@@ -2,54 +2,85 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Hyper Insta Bridge</title>
   <meta name="description" content="Bridges Instagram Direct Messages to Telegram forum topics using instagrapi, MQTT/FBNS realtime delivery, and python-telegram-bot." />
   <meta property="og:title" content="Hyper Insta Bridge" />
   <meta property="og:description" content="Bridges Instagram Direct Messages to Telegram forum topics using instagrapi, MQTT/FBNS realtime delivery, and python-telegram-bot." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
   <style>
     :root {
-      --bg-outer: #090A0D;
-      --bg-shell: #111318;
-      --bg-card: #171920;
-      --bg-card-hover: #1C1F28;
-      --bg-input: #111318;
-      --bg-pill: #1B1E26;
-      --border: rgba(255, 255, 255, 0.068);
-      --border-strong: rgba(255, 255, 255, 0.12);
-      --border-focus: #FF5A26;
-      --text-primary: #F8FAFC;
-      --text-secondary: #94A3B8;
-      --text-muted: #64748B;
-      --accent: #FF5A26;
-      --accent-hover: #FF6E40;
-      --accent-soft: rgba(255, 90, 38, 0.14);
+      --bg-base: #060608;
+      --bg-surface: #0E0E14;
+      --bg-surface-elevated: #15151E;
+      --bg-input: #0A0A0E;
+      --bg-hover: #1C1C28;
+
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --border-base: rgba(255, 255, 255, 0.1);
+      --border-strong: rgba(255, 255, 255, 0.18);
+
+      --text-main: #FFFFFF;
+      --text-muted: #9494A8;
+      --text-dim: #5E5E72;
+
+      /* Authentic Instagram Gradient & Brand Cues */
+      --ig-gradient: linear-gradient(135deg, #833AB4 0%, #C13584 25%, #E1306C 50%, #FD1D1D 75%, #F77737 100%);
+      --ig-gradient-soft: linear-gradient(135deg, rgba(131, 58, 180, 0.16) 0%, rgba(225, 48, 108, 0.14) 50%, rgba(247, 119, 55, 0.12) 100%);
+      --ig-pink: #E1306C;
+      --ig-purple: #833AB4;
+      --ig-orange: #F77737;
+
+      --tg-blue: #2AABEE;
       --ok: #10B981;
+      --ok-glow: rgba(16, 185, 129, 0.25);
       --warn: #F59E0B;
       --err: #EF4444;
+
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+      --radius-xl: 28px;
+      --radius-pill: 9999px;
+
+      --shadow-glass: 0 20px 50px rgba(0, 0, 0, 0.6);
+      --shadow-glow: 0 8px 32px rgba(225, 48, 108, 0.28);
     }
 
-    * { box-sizing: border-box; }
-
-    html { scroll-behavior: smooth; }
-
-    body {
+    * {
+      box-sizing: border-box;
       margin: 0;
-      background: var(--bg-outer);
-      color: var(--text-primary);
-      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      background: var(--bg-base);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
       font-size: 13.5px;
       line-height: 1.5;
       min-height: 100vh;
-      padding: 18px 22px 36px;
       -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
 
-    @media (max-width: 768px) {
-      body { padding: 0 0 28px; }
+    /* Ambient Background Glow */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -150px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 450px;
+      background: radial-gradient(ellipse at center, rgba(225, 48, 108, 0.12) 0%, rgba(131, 58, 180, 0.08) 45%, transparent 70%);
+      filter: blur(60px);
+      pointer-events: none;
+      z-index: 0;
     }
 
     .mono {
@@ -61,180 +92,255 @@
       font-variant-numeric: tabular-nums;
     }
 
-    /* Main Framed App Shell */
-    .app-frame {
-      max-width: 1400px;
-      margin: 0 auto;
-      background: var(--bg-shell);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      overflow: hidden;
-      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
-      min-height: calc(100vh - 54px);
+    /* Layout Shell */
+    .app-root {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
       display: flex;
       flex-direction: column;
     }
 
-    @media (max-width: 768px) {
-      .app-frame {
-        border-radius: 0;
-        border-left: none;
-        border-right: none;
-        min-height: 100vh;
-      }
-    }
-
-    /* Top Bar Contract: Zone 1 Brand | Zone 2 Pill Nav | Zone 3 User Action */
-    header.topbar {
+    /* Top Navigation Bar */
+    header.main-header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(6, 6, 8, 0.85);
+      backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 12px 24px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 32px;
-      padding: 14px 28px;
-      border-bottom: 1px solid var(--border);
-      background: rgba(17, 19, 24, 0.92);
-      backdrop-filter: blur(12px);
-      position: sticky;
-      top: 0;
-      z-index: 30;
+      gap: 16px;
     }
 
-    .brand-mark {
+    .brand-group {
       display: flex;
       align-items: center;
       gap: 11px;
       text-decoration: none;
-      color: var(--text-primary);
+      color: var(--text-main);
       font-weight: 700;
-      font-size: 15.5px;
+      font-size: 15px;
       letter-spacing: -0.02em;
-      white-space: nowrap;
       flex-shrink: 0;
     }
 
-    .brand-icon {
+    .brand-icon-box {
       width: 34px;
       height: 34px;
-      border-radius: 50%;
-      background: linear-gradient(135deg, #FF7043 0%, #FF4514 100%);
+      border-radius: 10px;
+      background: var(--ig-gradient);
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 4px 14px rgba(255, 90, 38, 0.35);
+      box-shadow: 0 4px 16px rgba(225, 48, 108, 0.38);
       flex-shrink: 0;
     }
 
-    nav.pill-nav {
+    /* Desktop Navigation Pill Tabs */
+    nav.desktop-nav {
       display: flex;
       align-items: center;
-      gap: 4px;
-      background: var(--bg-pill);
-      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-base);
       padding: 4px;
-      border-radius: 999px;
+      border-radius: var(--radius-pill);
+      gap: 3px;
     }
 
-    nav.pill-nav a {
-      color: var(--text-secondary);
-      text-decoration: none;
+    nav.desktop-nav button {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      padding: 7px 16px;
+      border-radius: var(--radius-pill);
       font-size: 12.5px;
       font-weight: 600;
-      padding: 7px 16px;
-      border-radius: 999px;
+      cursor: pointer;
+      transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
       white-space: nowrap;
-      flex-shrink: 0;
-      transition: color 150ms ease, background 150ms ease;
     }
 
-    nav.pill-nav a:hover {
-      color: var(--text-primary);
+    nav.desktop-nav button:hover {
+      color: var(--text-main);
     }
 
-    nav.pill-nav a.active {
-      background: var(--accent);
-      color: #FFFFFF;
-      box-shadow: 0 2px 10px rgba(255, 90, 38, 0.35);
+    nav.desktop-nav button.active {
+      background: rgba(255, 255, 255, 0.14);
+      color: var(--text-main);
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
     }
 
-    .top-profile {
+    .header-user-zone {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
       flex-shrink: 0;
     }
 
-    .avatar-circle {
-      width: 34px;
-      height: 34px;
+    .user-tag {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 3px 12px 3px 4px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-pill);
+    }
+
+    .user-avatar-dot {
+      width: 24px;
+      height: 24px;
       border-radius: 50%;
-      background: #232733;
-      border: 1px solid var(--border-strong);
-      color: var(--text-primary);
+      background: var(--ig-gradient);
+      color: #FFF;
       font-weight: 700;
-      font-size: 13px;
+      font-size: 11px;
       display: flex;
       align-items: center;
       justify-content: center;
       text-transform: uppercase;
     }
 
-    @media (max-width: 960px) {
-      nav.pill-nav { display: none; }
-      header.topbar { padding: 12px 18px; }
+    /* Viewport Content */
+    main.content-viewport {
+      max-width: 1200px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 24px 24px 50px;
+      flex: 1;
     }
 
-    /* Buttons & Inputs */
-    button {
-      background: #1E222D;
-      color: var(--text-primary);
-      border: 1px solid var(--border-strong);
-      padding: 8px 15px;
-      border-radius: 9px;
+    /* Mobile Responsive Adaptation */
+    @media (max-width: 768px) {
+      header.main-header { padding: 10px 16px; }
+      nav.desktop-nav { display: none !important; }
+      main.content-viewport { padding: 16px 14px 90px; }
+    }
+
+    /* Floating Bottom Dock for Mobile ONLY */
+    nav.mobile-bottom-dock {
+      display: none;
+      position: fixed;
+      bottom: 14px;
+      left: 14px;
+      right: 14px;
+      z-index: 60;
+      background: rgba(14, 14, 20, 0.88);
+      backdrop-filter: blur(28px) saturate(190%);
+      -webkit-backdrop-filter: blur(28px) saturate(190%);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-xl);
+      padding: 6px 10px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
+      justify-content: space-around;
+      align-items: center;
+    }
+
+    @media (max-width: 768px) {
+      nav.mobile-bottom-dock { display: flex; }
+    }
+
+    nav.mobile-bottom-dock button {
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 10px;
+      font-weight: 600;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      padding: 6px 8px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      transition: all 160ms ease;
+      min-width: 52px;
+    }
+
+    nav.mobile-bottom-dock button.active {
+      color: var(--ig-pink);
+      background: rgba(225, 48, 108, 0.1);
+    }
+
+    nav.mobile-bottom-dock button svg {
+      width: 19px;
+      height: 19px;
+      stroke-width: 2.2;
+    }
+
+    /* Buttons */
+    button.btn {
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--text-main);
+      border: 1px solid var(--border-base);
+      padding: 9px 16px;
+      border-radius: var(--radius-sm);
       font-size: 12.5px;
       font-weight: 600;
       font-family: inherit;
       cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      transition: all 160ms cubic-bezier(0.16, 1, 0.3, 1);
       white-space: nowrap;
-      flex-shrink: 0;
-      transition: background 150ms ease, transform 120ms ease, opacity 150ms ease;
+      min-height: 36px;
     }
 
-    button:hover:not(:disabled) {
-      background: #262B38;
+    button.btn:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: var(--border-strong);
     }
 
-    button:active:not(:disabled) {
+    button.btn:active:not(:disabled) {
       transform: scale(0.985);
     }
 
-    button:disabled {
-      opacity: 0.42;
+    button.btn:disabled {
+      opacity: 0.45;
       cursor: not-allowed;
     }
 
-    button.primary {
-      background: linear-gradient(135deg, #FF6A3D 0%, #FF4B19 100%);
-      border-color: #FF5A26;
+    button.btn-primary {
+      background: var(--ig-gradient);
+      border: none;
       color: #FFFFFF;
-      box-shadow: 0 4px 14px rgba(255, 90, 38, 0.26);
+      box-shadow: 0 4px 16px rgba(225, 48, 108, 0.35);
     }
 
-    button.primary:hover:not(:disabled) {
-      background: linear-gradient(135deg, #FF7950 0%, #FF5726 100%);
+    button.btn-primary:hover:not(:disabled) {
+      opacity: 0.94;
+      box-shadow: 0 6px 20px rgba(225, 48, 108, 0.45);
     }
 
-    button.success-btn {
-      background: rgba(16, 185, 129, 0.14);
-      border-color: rgba(16, 185, 129, 0.45);
-      color: var(--ok);
+    button.btn-subtle {
+      background: transparent;
+      border-color: transparent;
+      color: var(--text-muted);
     }
 
-    button.danger {
-      background: rgba(239, 68, 68, 0.08);
-      color: #F87171;
+    button.btn-subtle:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+    }
+
+    button.btn-danger {
+      background: rgba(239, 68, 68, 0.12);
       border-color: rgba(239, 68, 68, 0.3);
+      color: #F87171;
     }
 
+    button.btn-danger:hover:not(:disabled) {
+      background: rgba(239, 68, 68, 0.22);
+    }
+
+    /* Input Controls */
     input[type="text"],
     input[type="password"],
     input[type="number"],
@@ -242,20 +348,21 @@
     select {
       width: 100%;
       background: var(--bg-input);
-      border: 1px solid var(--border-strong);
-      color: var(--text-primary);
-      padding: 10px 13px;
-      border-radius: 9px;
+      border: 1px solid var(--border-base);
+      color: var(--text-main);
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
       font-size: 13px;
       font-family: inherit;
       outline: none;
-      transition: border-color 150ms ease;
+      transition: all 160ms ease;
     }
 
     input:focus,
     textarea:focus,
     select:focus {
       border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(225, 48, 108, 0.22);
     }
 
     label {
@@ -264,1586 +371,1584 @@
       justify-content: space-between;
       font-size: 12px;
       font-weight: 500;
-      color: var(--text-secondary);
+      color: var(--text-muted);
       margin-bottom: 6px;
     }
 
-    .field { margin-bottom: 13px; }
+    .form-group {
+      margin-bottom: 16px;
+    }
 
-    /* Auth Gate Screen (Sign In vs Register) */
-    .auth-gate-wrap {
-      flex: 1;
+    /* Apple-Style Smooth Switch */
+    input[type="checkbox"].apple-switch {
+      width: 44px;
+      height: 25px;
+      appearance: none;
+      background: #282834;
+      border-radius: 999px;
+      position: relative;
+      cursor: pointer;
+      transition: background 200ms ease;
+      flex-shrink: 0;
+      outline: none;
+    }
+
+    input[type="checkbox"].apple-switch::after {
+      content: "";
+      position: absolute;
+      top: 2.5px;
+      left: 2.5px;
+      width: 20px;
+      height: 20px;
+      background: #FFFFFF;
+      border-radius: 50%;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
+      transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    input[type="checkbox"].apple-switch:checked {
+      background: var(--ig-pink);
+    }
+
+    input[type="checkbox"].apple-switch:checked::after {
+      transform: translateX(19px);
+    }
+
+    /* Cards */
+    .glass-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-base);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      position: relative;
+    }
+
+    @media (max-width: 600px) {
+      .glass-card { padding: 18px 16px; border-radius: var(--radius-md); }
+    }
+
+    .glass-card-header {
       display: flex;
       align-items: center;
-      justify-content: center;
-      padding: 40px 20px;
-      background: radial-gradient(circle at 50% 0%, rgba(255, 90, 38, 0.15), transparent 55%);
-    }
-
-    .auth-gate-card {
-      width: 100%;
-      max-width: 430px;
-      background: var(--bg-card);
-      border: 1px solid var(--border-strong);
-      border-radius: 18px;
-      padding: 30px 28px;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-    }
-
-    .segmented {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 4px;
+      justify-content: space-between;
+      gap: 16px;
       margin-bottom: 20px;
+      flex-wrap: wrap;
     }
 
-    .segmented.three {
-      grid-template-columns: repeat(3, 1fr);
+    .card-heading {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.015em;
     }
 
-    .segmented button {
-      border: none;
-      background: transparent;
-      color: var(--text-secondary);
-      padding: 8px 10px;
-      border-radius: 7px;
-      font-size: 12.5px;
-      box-shadow: none;
+    .card-caption {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 3px;
     }
 
-    .segmented button.active {
-      background: var(--accent);
-      color: #FFFFFF;
+    /* View Panels Animation */
+    .view-panel {
+      animation: fadeIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    /* Dashboard Content Canvas */
-    main.dashboard-body {
-      padding: 0 28px 36px;
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
-    @media (max-width: 768px) {
-      main.dashboard-body { padding: 0 16px 28px; }
-    }
-
-    /* Hero Greeting Banner with Subtle Warm Orange Glow */
-    .hero-banner {
+    /* Hero Spotlight Card */
+    .hero-spotlight {
+      background: var(--ig-gradient-soft);
+      border: 1px solid rgba(225, 48, 108, 0.28);
+      border-radius: var(--radius-lg);
+      padding: 26px 28px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 20px;
-      padding: 26px 4px 10px;
-      background: radial-gradient(ellipse at 12% 40%, rgba(255, 90, 38, 0.16), transparent 60%);
       flex-wrap: wrap;
+      margin-bottom: 22px;
+      position: relative;
+      overflow: hidden;
     }
 
-    .hero-kicker {
-      font-size: 13px;
-      color: var(--text-secondary);
-      margin-bottom: 4px;
-      font-weight: 500;
+    .hero-spotlight-left {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+
+    .story-ring-wrap {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      padding: 3px;
+      background: var(--ig-gradient);
+      box-shadow: 0 4px 20px rgba(225, 48, 108, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .story-ring-inner {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: var(--bg-surface);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #FFF;
+      font-weight: 800;
+      font-size: 20px;
     }
 
     .hero-title {
-      margin: 0;
-      font-size: 25px;
-      font-weight: 700;
-      letter-spacing: -0.025em;
-      color: var(--text-primary);
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
     }
 
-    .hero-actions {
+    .hero-status-row {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
       flex-wrap: wrap;
     }
 
-    /* Top Bento Row: 3x2 KPI Grid on Left + Accounts Overview Card on Right */
-    .bento-top {
-      display: grid;
-      grid-template-columns: 1.55fr 1fr;
-      gap: 16px;
-      align-items: stretch;
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 10px var(--ok-glow);
     }
 
-    .kpi-grid-6 {
+    .status-dot.warn {
+      background: var(--warn);
+      box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
+    }
+
+    /* 4-Column Responsive Metrics */
+    .metrics-row {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 14px;
+      margin-bottom: 22px;
     }
 
-    @media (max-width: 1180px) {
-      .bento-top { grid-template-columns: 1fr; }
+    @media (max-width: 992px) {
+      .metrics-row { grid-template-columns: repeat(2, 1fr); }
     }
 
-    @media (max-width: 760px) {
-      .kpi-grid-6 { grid-template-columns: 1fr 1fr; }
+    @media (max-width: 480px) {
+      .metrics-row { grid-template-columns: 1fr; }
     }
 
-    @media (max-width: 520px) {
-      .kpi-grid-6 { grid-template-columns: 1fr; }
-    }
-
-    .card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 14px;
+    .metric-cell {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-base);
+      border-radius: var(--radius-md);
       padding: 18px 20px;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
+      gap: 14px;
+      transition: all 160ms ease;
     }
 
-    .kpi-top {
+    .metric-cell:hover {
+      border-color: var(--border-strong);
+    }
+
+    .metric-top {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 14px;
-    }
-
-    .kpi-label-group {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .kpi-icon {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-      font-size: 14px;
-      font-weight: 700;
-    }
-
-    .icon-lavender { background: rgba(167, 139, 250, 0.14); color: #A78BFA; }
-    .icon-orange   { background: rgba(255, 90, 38, 0.15);   color: #FF6B3D; }
-    .icon-sky      { background: rgba(56, 189, 248, 0.14);  color: #38BDF8; }
-    .icon-emerald  { background: rgba(16, 185, 129, 0.14);  color: #34D399; }
-    .icon-amber    { background: rgba(245, 158, 11, 0.14);  color: #FBBF24; }
-    .icon-rose     { background: rgba(244, 114, 182, 0.14); color: #F472B6; }
-
-    .kpi-title {
-      font-size: 12.5px;
-      font-weight: 500;
-      color: var(--text-secondary);
-    }
-
-    .kpi-main {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 12px;
-    }
-
-    .kpi-value {
-      font-size: 21px;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      color: var(--text-primary);
-    }
-
-    .kpi-sub {
-      font-size: 11.5px;
-      font-weight: 600;
-    }
-
-    .kpi-footer {
-      padding-top: 10px;
-      border-top: 1px solid var(--border);
-      font-size: 11.5px;
-      color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-    }
-
-    /* Toggle Switch */
-    input[type="checkbox"].switch {
-      width: 38px;
-      height: 20px;
-      appearance: none;
-      background: #272B38;
-      border-radius: 999px;
-      position: relative;
-      cursor: pointer;
-      transition: background 150ms ease;
-      flex-shrink: 0;
-      margin: 0;
-    }
-
-    input[type="checkbox"].switch::after {
-      content: "";
-      position: absolute;
-      top: 2px;
-      left: 2.5px;
-      width: 16px;
-      height: 16px;
-      background: #FFFFFF;
-      border-radius: 50%;
-      transition: transform 150ms ease;
-    }
-
-    input[type="checkbox"].switch:checked {
-      background: var(--accent);
-    }
-
-    input[type="checkbox"].switch:checked::after {
-      transform: translateX(17px);
-    }
-
-    /* Segmented Progress Bar in Accounts Overview Card */
-    .seg-bar {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 6px;
-      margin: 12px 0 16px;
-    }
-
-    .seg-bar-item {
-      height: 7px;
-      border-radius: 999px;
-      background: #252936;
-      overflow: hidden;
-    }
-
-    .seg-bar-fill {
-      height: 100%;
-      border-radius: 999px;
-      transition: transform 200ms ease;
-    }
-
-    /* Account Selector Rows */
-    .account-list {
-      display: flex;
-      flex-direction: column;
-      gap: 7px;
-      max-height: 185px;
-      overflow-y: auto;
-    }
-
-    .account-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 9px 12px;
-      border-radius: 10px;
-      background: var(--bg-input);
-      border: 1px solid var(--border);
-      cursor: pointer;
-      transition: border-color 150ms ease, background 150ms ease;
-    }
-
-    .account-row:hover {
-      background: var(--bg-card-hover);
-    }
-
-    .account-row.active {
-      border-color: var(--accent);
-      background: rgba(255, 90, 38, 0.08);
-    }
-
-    /* Bottom 2-Column Workspace Grid */
-    .bento-bottom {
-      display: grid;
-      grid-template-columns: 1.05fr 0.95fr;
-      gap: 16px;
-      align-items: start;
-    }
-
-    @media (max-width: 1080px) {
-      .bento-bottom { grid-template-columns: 1fr; }
-    }
-
-    .card-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding-bottom: 14px;
-      margin-bottom: 16px;
-      border-bottom: 1px solid var(--border);
-      flex-wrap: wrap;
-    }
-
-    .card-title {
-      margin: 0;
-      font-size: 15px;
-      font-weight: 700;
-      letter-spacing: -0.01em;
-    }
-
-    .form-2col {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-
-    @media (max-width: 600px) {
-      .form-2col { grid-template-columns: 1fr; }
-    }
-
-    details.drawer {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--bg-input);
-      padding: 10px 14px;
-      margin-bottom: 14px;
-    }
-
-    details.drawer summary {
-      cursor: pointer;
       font-size: 12px;
       font-weight: 600;
-      color: var(--text-secondary);
-      user-select: none;
+      color: var(--text-muted);
     }
 
-    /* Simple Live Logs Console */
-    .log-console {
+    .metric-val {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.025em;
+    }
+
+    .metric-foot {
+      padding-top: 10px;
+      border-top: 1px solid var(--border-subtle);
+      font-size: 11.5px;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Accounts Grid */
+    .accounts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    @media (max-width: 480px) {
+      .accounts-grid { grid-template-columns: 1fr; }
+    }
+
+    .account-card-box {
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-base);
+      border-radius: var(--radius-md);
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 16px;
+      transition: all 180ms ease;
+      cursor: pointer;
+    }
+
+    .account-card-box:hover {
+      border-color: rgba(225, 48, 108, 0.35);
+      transform: translateY(-2px);
+    }
+
+    .account-card-box.active-bridge {
+      border-color: rgba(225, 48, 108, 0.45);
+      background: linear-gradient(135deg, rgba(225, 48, 108, 0.08) 0%, rgba(21, 21, 30, 0.9) 100%);
+    }
+
+    /* Segmented Tab Control in Box */
+    .box-tabs {
+      display: flex;
       background: var(--bg-input);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      height: 240px;
+      border: 1px solid var(--border-base);
+      padding: 3px;
+      border-radius: var(--radius-sm);
+      gap: 2px;
+      margin-bottom: 20px;
+    }
+
+    .box-tabs button {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 150ms ease;
+    }
+
+    .box-tabs button.active {
+      background: rgba(255, 255, 255, 0.12);
+      color: #FFF;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Terminal Console */
+    .terminal-box {
+      background: #06060A;
+      border: 1px solid var(--border-base);
+      border-radius: var(--radius-md);
+      height: 380px;
       overflow-y: auto;
-      padding: 12px 14px;
+      padding: 14px 18px;
       font-size: 12px;
       line-height: 1.65;
     }
 
-    .log-line {
+    .terminal-line {
       white-space: pre-wrap;
       word-break: break-word;
       padding: 1.5px 0;
     }
 
-    .log-ts { color: var(--text-muted); margin-right: 8px; }
-    .log-lvl-INFO { color: #38BDF8; margin-right: 6px; }
-    .log-lvl-WARNING { color: var(--warn); margin-right: 6px; }
-    .log-lvl-ERROR { color: var(--err); font-weight: 600; margin-right: 6px; }
+    .ts-dim { color: var(--text-dim); margin-right: 10px; }
+    .lvl-info { color: #38BDF8; margin-right: 8px; font-weight: 600; }
+    .lvl-warn { color: var(--warn); margin-right: 8px; font-weight: 600; }
+    .lvl-err { color: var(--err); margin-right: 8px; font-weight: 700; }
 
+    /* Auth Screen */
+    .auth-fullscreen {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+
+    .auth-dialog {
+      width: 100%;
+      max-width: 420px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-xl);
+      padding: 36px 32px;
+      box-shadow: var(--shadow-glass);
+      position: relative;
+    }
+
+    /* Toast Notification */
+    #global-toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: rgba(20, 20, 28, 0.95);
+      backdrop-filter: blur(20px);
+      color: #FFF;
+      border: 1px solid rgba(225, 48, 108, 0.4);
+      border-radius: var(--radius-pill);
+      padding: 11px 22px;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.6);
+      display: none;
+      align-items: center;
+      gap: 10px;
+      z-index: 100;
+    }
+
+    @media (max-width: 768px) {
+      #global-toast {
+        bottom: 80px;
+        left: 20px;
+        right: 20px;
+        justify-content: center;
+      }
+    }
+
+    .text-pink { color: var(--ig-pink); }
     .text-ok { color: var(--ok); }
     .text-warn { color: var(--warn); }
     .text-err { color: var(--err); }
-    .text-accent { color: var(--accent); }
+    .text-tg { color: var(--tg-blue); }
   </style>
 </head>
 <body>
-  <div class="app-frame">
-    <!-- Top Bar Contract: Zone 1 Brand | Zone 2 Pill Nav | Zone 3 User Action -->
-    <header class="topbar">
-      <a href="#" class="brand-mark">
-        <span class="brand-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+  <div class="app-root">
+
+    <!-- Top App Header -->
+    <header class="main-header">
+      <a href="#" class="brand-group">
+        <div class="brand-icon-box">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+            <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
+            <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
           </svg>
-        </span>
-        <span>Hyper Insta</span>
+        </div>
+        <span>Hyper Insta Bridge</span>
       </a>
 
-      <nav class="pill-nav" id="top-pill-nav" style="display: none;">
-        <a href="#sec-overview" class="active" onclick="setActiveNav(this)">Overview</a>
-        <a href="#sec-settings" onclick="setActiveNav(this)">Settings</a>
-        <a href="#sec-auth" onclick="setActiveNav(this)">Authentication</a>
-        <a href="#sec-telegram" onclick="setActiveNav(this)">Telegram &amp; Topics</a>
-        <a href="#sec-logs" onclick="setActiveNav(this)">Live Console</a>
+      <!-- Desktop-Only Unified Tab Bar -->
+      <nav class="desktop-nav" id="desktop-tabs-nav" style="display: none;">
+        <button class="active" onclick="navigateTo('overview')">Overview</button>
+        <button onclick="navigateTo('accounts')">Instagram Accounts</button>
+        <button onclick="navigateTo('telegram')">Telegram Route</button>
+        <button onclick="navigateTo('console')">Live Console</button>
+        <button onclick="navigateTo('settings')">Settings</button>
       </nav>
 
-      <div class="top-profile" id="top-user-zone">
-        <span style="font-size: 12px; color: var(--text-muted);">Authentication Required</span>
+      <!-- User Zone -->
+      <div class="header-user-zone" id="header-user-zone">
+        <span style="font-size: 12px; color: var(--text-dim);">Authentication Required</span>
       </div>
     </header>
 
-    <!-- 1. AUTHENTICATION GATE (Sign In vs Create Workspace) -->
-    <div id="auth-gate" class="auth-gate-wrap">
-      <div class="auth-gate-card">
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 18px;">
-          <div class="brand-icon" style="width: 40px; height: 40px;">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+    <!-- Mobile-Only Floating Bottom Dock -->
+    <nav class="mobile-bottom-dock" id="mobile-dock-nav" style="display: none;">
+      <button class="active" onclick="navigateTo('overview')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span>Overview</span>
+      </button>
+      <button onclick="navigateTo('accounts')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/></svg>
+        <span>Accounts</span>
+      </button>
+      <button onclick="navigateTo('telegram')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        <span>Telegram</span>
+      </button>
+      <button onclick="navigateTo('console')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        <span>Console</span>
+      </button>
+      <button onclick="navigateTo('settings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>Settings</span>
+      </button>
+    </nav>
+
+    <!-- SIGN IN / REGISTER SCREEN -->
+    <div id="auth-screen" class="auth-fullscreen">
+      <div class="auth-dialog">
+        <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 24px;">
+          <div class="brand-icon-box" style="width: 44px; height: 44px; border-radius: 12px;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+              <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
+              <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
             </svg>
           </div>
           <div>
-            <h1 style="margin: 0; font-size: 19px; font-weight: 700;">Workspace Access</h1>
-            <div style="font-size: 12px; color: var(--text-secondary);">Sign in to your private database or register a new workspace</div>
+            <h1 style="font-size: 19px; font-weight: 800; letter-spacing: -0.02em;">Hyper Insta Bridge</h1>
+            <div style="font-size: 12px; color: var(--text-muted);">Sign in to access your bridge</div>
           </div>
         </div>
 
-        <div class="segmented">
-          <button id="gate-tab-login" class="active" onclick="setGateMode('login')">Sign In</button>
-          <button id="gate-tab-register" onclick="setGateMode('register')">Register Workspace</button>
+        <div class="box-tabs" style="margin-bottom: 20px;">
+          <button id="gate-btn-signin" class="active" onclick="setAuthMode('login')">Sign In</button>
+          <button id="gate-btn-register" onclick="setAuthMode('register')">Create Account</button>
         </div>
 
-        <div class="field">
-          <label>Workspace Username</label>
-          <input type="text" id="gate-username" class="mono" placeholder="e.g. rex" autocomplete="username" />
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="gate-user" class="mono" placeholder="e.g. rex" autocomplete="username" />
         </div>
 
-        <div class="field">
+        <div class="form-group">
           <label>
-            <span id="gate-pw-label">Workspace Password</span>
-            <span style="font-size: 11px; color: var(--text-muted); cursor: pointer;" onclick="toggleGatePw()">Show / Hide</span>
+            <span id="gate-pw-label">Password</span>
+            <button type="button" class="btn-subtle" style="padding: 0; font-size: 11px;" onclick="togglePasswordInput()">Show / Hide</button>
           </label>
-          <input type="password" id="gate-password" placeholder="Enter your workspace password" autocomplete="current-password" />
+          <input type="password" id="gate-pass" placeholder="Password (min 4 characters)" autocomplete="current-password" />
         </div>
 
-        <div id="gate-hint" style="font-size: 11.5px; color: var(--text-muted); margin-bottom: 14px;">
-          Existing workspaces are password-protected. You can also sign in or register via the Telegram Bot with <code class="mono">/start</code>.
-        </div>
+        <div id="gate-err-box" class="text-err" style="font-size: 12px; margin-bottom: 14px; min-height: 18px;"></div>
 
-        <div id="gate-error" class="text-err" style="font-size: 12.5px; margin-bottom: 12px; min-height: 18px;"></div>
-
-        <button class="primary" id="gate-submit-btn" onclick="submitWorkspaceAuth()" style="width: 100%; padding: 11px; font-size: 13.5px;">
-          Sign In to Workspace
+        <button class="btn btn-primary" id="gate-submit-btn" onclick="submitAuth()" style="width: 100%; padding: 12px; font-size: 13.5px; border-radius: var(--radius-sm);">
+          Sign In
         </button>
+
+        <div style="margin-top: 18px; text-align: center; font-size: 11.5px; color: var(--text-dim); line-height: 1.5;">
+          You can also interact directly with the bot on Telegram via <code class="mono text-pink">/start</code>.
+        </div>
       </div>
     </div>
 
-    <!-- 2. AUTHENTICATED DASHBOARD VIEWPORT -->
-    <main id="dashboard-view" class="dashboard-body" style="display: none;">
+    <!-- MAIN DASHBOARD CONTENT -->
+    <main id="dashboard-content" class="content-viewport" style="display: none;">
 
-      <!-- 2FA / Challenge Code Prompt Banner -->
-      <div id="code-banner" style="display: none; margin-top: 18px; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.45); border-radius: 14px; padding: 14px 20px; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
+      <!-- 2FA Checkpoint Alert -->
+      <div id="challenge-box" style="display: none; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: var(--radius-md); padding: 16px 20px; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap;">
         <div>
-          <div style="font-weight: 700; color: var(--warn);">Instagram Verification / 2FA Code Required</div>
-          <div id="code-hint" style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;"></div>
+          <div style="font-weight: 700; color: var(--warn); font-size: 14px;">Instagram Verification Required</div>
+          <div id="challenge-hint" style="font-size: 12px; color: var(--text-muted); margin-top: 3px;">Enter the 2FA or SMS verification code sent by Instagram.</div>
         </div>
         <div style="display: flex; gap: 8px;">
-          <input type="text" id="code-input" class="mono" placeholder="6 or 8 digit code" style="width: 175px;" />
-          <button class="primary" onclick="submitCode()">Submit Code</button>
+          <input type="text" id="challenge-input" class="mono" placeholder="6-digit code" style="width: 150px;" />
+          <button class="btn btn-primary" onclick="submit2FACode()">Verify</button>
         </div>
       </div>
 
-      <!-- Hero Greeting Header -->
-      <section id="sec-overview" class="hero-banner">
-        <div>
-          <div class="hero-kicker" id="hero-greeting">Welcome back 👋</div>
-          <h1 class="hero-title" id="hero-headline">Here's Your Bridge Overview</h1>
-        </div>
-
-        <div class="hero-actions">
-          <button onclick="selectIgAccount('__NEW__')">+ Add IG Account</button>
-          <button id="btn-hero-relogin" onclick="reloginSlot()" disabled>Relogin</button>
-          <button id="btn-hero-download" onclick="downloadActiveSession()" disabled>Download .json</button>
-          <button id="btn-attach-bridge" class="primary" onclick="attachCurrentToBridge()" disabled>Attach to Bridge</button>
-        </div>
-      </section>
-
-      <!-- Top Bento Grid: 6 KPI Cards (Left) + Instagram Accounts & Bridge Matrix (Right) -->
-      <section class="bento-top">
-        <div class="kpi-grid-6">
-          <!-- KPI 1: Instagram Auth Status -->
-          <div class="card">
-            <div class="kpi-top">
-              <div class="kpi-label-group">
-                <div class="kpi-icon icon-lavender">IG</div>
-                <span class="kpi-title">Instagram Session</span>
-              </div>
+      <!-- VIEW 1: OVERVIEW -->
+      <div id="view-overview" class="view-panel">
+        <!-- Spotlight Card -->
+        <section class="hero-spotlight">
+          <div class="hero-spotlight-left">
+            <div class="story-ring-wrap">
+              <div class="story-ring-inner" id="hero-avatar">IG</div>
             </div>
-            <div class="kpi-main">
-              <span class="kpi-value tabular" id="kpi-ig-status">Offline</span>
-              <span class="kpi-sub mono" id="kpi-ig-method">none</span>
-            </div>
-            <div class="kpi-footer">
-              <span id="kpi-ig-handle" class="mono">@none</span>
-              <span>Selected Slot</span>
-            </div>
-          </div>
-
-          <!-- KPI 2: Telegram Bridge Route -->
-          <div class="card">
-            <div class="kpi-top">
-              <div class="kpi-label-group">
-                <div class="kpi-icon icon-sky">TG</div>
-                <span class="kpi-title">Telegram Bridge</span>
-              </div>
-            </div>
-            <div class="kpi-main">
-              <span class="kpi-value tabular" id="kpi-bridge-state">Standby</span>
-              <span class="kpi-sub mono" id="kpi-bridge-bot">No bot</span>
-            </div>
-            <div class="kpi-footer">
-              <span id="kpi-bridge-group" class="mono">Group: unset</span>
-              <span>Forum Route</span>
-            </div>
-          </div>
-
-          <!-- KPI 3: Realtime MQTT -->
-          <div class="card">
-            <div class="kpi-top">
-              <div class="kpi-label-group">
-                <div class="kpi-icon icon-orange">⚡</div>
-                <span class="kpi-title">Realtime MQTT</span>
-              </div>
-              <input type="checkbox" class="switch" id="sw-realtime" onchange="toggleRealtime('realtime', this.checked)" disabled />
-            </div>
-            <div class="kpi-main">
-              <span class="kpi-value tabular" id="kpi-rt-state">OFF</span>
-              <span class="kpi-sub mono text-ok" id="kpi-rt-events">0 events</span>
-            </div>
-            <div class="kpi-footer">
-              <span id="kpi-rt-foot">edge-mqtt.facebook.com</span>
-            </div>
-          </div>
-
-          <!-- KPI 4: FBNS Push -->
-          <div class="card">
-            <div class="kpi-top">
-              <div class="kpi-label-group">
-                <div class="kpi-icon icon-emerald">🔔</div>
-                <span class="kpi-title">FBNS Push</span>
-              </div>
-              <input type="checkbox" class="switch" id="sw-fbns" onchange="toggleRealtime('fbns', this.checked)" disabled />
-            </div>
-            <div class="kpi-main">
-              <span class="kpi-value tabular" id="kpi-fbns-state">OFF</span>
-              <span class="kpi-sub mono text-ok" id="kpi-fbns-pushes">0 pushes</span>
-            </div>
-            <div class="kpi-footer">
-              <span id="kpi-fbns-foot">mqtt-mini.facebook.com</span>
-            </div>
-          </div>
-
-          <!-- KPI 5: Bridged Topics -->
-          <div class="card">
-            <div class="kpi-top">
-              <div class="kpi-label-group">
-                <div class="kpi-icon icon-amber">#</div>
-                <span class="kpi-title">Bridged Topics</span>
-              </div>
-            </div>
-            <div class="kpi-main">
-              <span class="kpi-value tabular" id="kpi-topics-count">0</span>
-              <span class="kpi-sub text-secondary">Forum Threads</span>
-            </div>
-            <div class="kpi-footer">
-              <span>Auto-synced per DM thread</span>
-            </div>
-          </div>
-
-          <!-- KPI 6: Forwarded Messages -->
-          <div class="card">
-            <div class="kpi-top">
-              <div class="kpi-label-group">
-                <div class="kpi-icon icon-rose">⇄</div>
-                <span class="kpi-title">DMs Forwarded</span>
-              </div>
-            </div>
-            <div class="kpi-main">
-              <span class="kpi-value tabular" id="kpi-forwarded-count">0</span>
-              <span class="kpi-sub mono" id="kpi-proxy-state">Direct</span>
-            </div>
-            <div class="kpi-footer">
-              <span id="kpi-storage-badge" class="mono">MongoDB</span>
-              <span>Isolated DB</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Right Overview Card: Instagram Accounts & Bridge Switcher -->
-        <div class="card">
-          <div>
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
-              <div>
-                <div style="font-size: 14.5px; font-weight: 700;">Instagram Accounts Matrix</div>
-                <div style="font-size: 12px; color: var(--text-secondary);" id="matrix-subtitle">Select an account to inspect or attach to bridge</div>
-              </div>
-              <button onclick="selectIgAccount('__NEW__')" style="padding: 6px 11px; font-size: 11.5px;">+ Add IG</button>
-            </div>
-
-            <div class="seg-bar">
-              <div class="seg-bar-item"><div class="seg-bar-fill" style="background: var(--accent); width: 100%;"></div></div>
-              <div class="seg-bar-item"><div class="seg-bar-fill" style="background: var(--ok); width: 100%;"></div></div>
-              <div class="seg-bar-item"><div class="seg-bar-fill" style="background: #38BDF8; width: 100%;"></div></div>
-            </div>
-
-            <div id="ig-list" class="account-list"></div>
-          </div>
-
-          <div class="kpi-footer" style="margin-top: 14px;">
-            <span id="bot-dm-hint">Manage directly in Telegram Bot with <code class="mono">/start</code></span>
-            <span class="mono" id="bridged-account-pill">Bridge: None</span>
-          </div>
-        </div>
-      </section>
-
-      <!-- Workspace Settings: bridge control, routing account and account management -->
-      <section id="sec-settings" class="card">
-        <div class="card-header">
-          <div>
-            <h2 class="card-title">Workspace Settings</h2>
-            <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
-              Control DM bridge routing, pick the Instagram account attached to Telegram, and manage saved accounts.
-            </div>
-          </div>
-          <span id="settings-bridge-status" class="text-warn" style="font-size: 12px; font-weight: 700;">Bridge status unknown</span>
-        </div>
-
-        <div class="form-2col">
-          <div class="card" style="padding: 16px; gap: 14px;">
             <div>
-              <div style="font-size: 13px; font-weight: 700; margin-bottom: 5px;">DM Bridge</div>
-              <div style="font-size: 12px; color: var(--text-secondary);">
-                Pause message forwarding without logging out or deleting the Instagram session.
+              <h1 class="hero-title" id="hero-account-handle">@none</h1>
+              <div class="hero-status-row">
+                <span id="hero-dot" class="status-dot"></span>
+                <span id="hero-account-status" class="text-ok">Online</span>
+                <span>·</span>
+                <span id="hero-bridge-status">Attached to Telegram</span>
+                <span>·</span>
+                <span id="hero-bot-name" class="text-tg">Bot Active</span>
               </div>
             </div>
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-              <label style="margin: 0;">Enable Instagram ↔ Telegram routing</label>
-              <input type="checkbox" class="switch" id="sw-bridge" onchange="toggleBridge(this.checked)" disabled />
-            </div>
-            <div id="settings-bridge-hint" style="font-size: 11.5px; color: var(--text-muted);">
-              Add an Instagram account to enable the bridge.
-            </div>
-            <div class="field" style="margin-bottom: 0;">
-              <label>Instagram account for the DM bridge</label>
-              <select id="bridge-account-select" disabled>
-                <option value="">Add an Instagram account first</option>
-              </select>
-            </div>
-            <button id="btn-bridge-attach" class="primary" onclick="attachBridgeSelectedAccount()" disabled>Use selected account</button>
-            <button onclick="document.getElementById('sec-telegram').scrollIntoView({behavior:'smooth'})">Configure Telegram group &amp; bot</button>
           </div>
 
-          <div class="card" style="padding: 16px; gap: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <button class="btn" onclick="navigateTo('accounts')">+ Add Account</button>
+            <button class="btn" id="btn-hero-relogin" onclick="reloginActiveAccount()" disabled>Relogin</button>
+            <button class="btn" id="btn-hero-export" onclick="downloadSessionFile()" disabled>Export .json</button>
+            <button class="btn btn-primary" id="btn-hero-attach" onclick="attachActiveToTelegram()" disabled>Attach to Telegram</button>
+          </div>
+        </section>
+
+        <!-- 4 Key Metrics -->
+        <section class="metrics-row">
+          <!-- Metric 1: Instagram Account -->
+          <div class="metric-cell">
+            <div class="metric-top">
+              <span>Instagram Session</span>
+              <span class="text-pink">IG</span>
+            </div>
             <div>
-              <div style="font-size: 13px; font-weight: 700; margin-bottom: 5px;">Instagram Accounts</div>
-              <div style="font-size: 12px; color: var(--text-secondary);">
-                View login state, choose the bridged account, or open an account's session controls.
-              </div>
+              <div class="metric-val tabular" id="metric-ig-state">Offline</div>
+              <div class="mono" style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;" id="metric-ig-login-method">none</div>
             </div>
-            <div id="settings-account-list" class="account-list" style="max-height: 260px;">
-              <div style="font-size: 12px; color: var(--text-muted);">No accounts loaded.</div>
+            <div class="metric-foot">
+              <span id="metric-ig-name" class="mono">@none</span>
+              <span>Selected Account</span>
             </div>
-            <button onclick="selectIgAccount('__NEW__')">＋ Add another account</button>
           </div>
-        </div>
-      </section>
 
-      <!-- Bottom Split Section: Authentication & Device Studio (Left) + Telegram Routing & Topics (Right) -->
-      <section class="bento-bottom">
-        <!-- Left Card: Instagram Authentication & Simulated Device Studio -->
-        <div id="sec-auth" class="card">
-          <div class="card-header">
+          <!-- Metric 2: Telegram Router -->
+          <div class="metric-cell">
+            <div class="metric-top">
+              <span>Telegram Route</span>
+              <span class="text-tg">TG</span>
+            </div>
             <div>
-              <h2 class="card-title">Instagram Authentication &amp; Device Studio</h2>
-              <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;" id="auth-mode-caption">
-                Password login automatically enables Realtime MQTT &amp; FBNS
-              </div>
+              <div class="metric-val tabular" id="metric-tg-state">Standby</div>
+              <div class="mono" style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;" id="metric-tg-bot-handle">No Bot</div>
+            </div>
+            <div class="metric-foot">
+              <span id="metric-tg-chat-id" class="mono">Group: Unset</span>
+              <span>Forum Topics</span>
             </div>
           </div>
 
-          <div class="segmented three">
-            <button id="tab-pw" class="active" onclick="setAuthTab('password')">Password Login</button>
-            <button id="tab-ck" onclick="setAuthTab('cookie')">Cookie Login</button>
-            <button id="tab-js" onclick="setAuthTab('json')">Session JSON</button>
+          <!-- Metric 3: Realtime & Push -->
+          <div class="metric-cell">
+            <div class="metric-top">
+              <span>Realtime &amp; Push</span>
+              <span class="text-ok">MQTT</span>
+            </div>
+            <div>
+              <div class="metric-val tabular" id="metric-sync-events">0</div>
+              <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;" id="metric-sync-state">Polling mode</div>
+            </div>
+            <div class="metric-foot">
+              <span id="metric-sync-host">edge-mqtt.facebook.com</span>
+              <span>Real-time</span>
+            </div>
           </div>
 
-          <div class="field">
+          <!-- Metric 4: DMs Forwarded -->
+          <div class="metric-cell">
+            <div class="metric-top">
+              <span>DMs Forwarded</span>
+              <span>⇄</span>
+            </div>
+            <div>
+              <div class="metric-val tabular" id="metric-dms-forwarded">0</div>
+              <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;" id="metric-topics-count">0 linked topics</div>
+            </div>
+            <div class="metric-foot">
+              <span id="metric-db-info" class="mono">Storage: MongoDB</span>
+              <span>Synchronized</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- Message Forwarding Router Panel -->
+        <section class="glass-card">
+          <div class="glass-card-header">
+            <div>
+              <h2 class="card-heading">Message Forwarding Router</h2>
+              <div class="card-caption">Pause or resume forwarding without losing sessions, and designate the active bridge account.</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 14px;">
+              <span id="quick-bridge-status-text" class="mono text-ok" style="font-size: 12px; font-weight: 600;">Forwarding Active</span>
+              <input type="checkbox" class="apple-switch" id="sw-forwarding-master" onchange="toggleMasterForwarding(this.checked)" />
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 18px;">
+            <div style="background: var(--bg-surface-elevated); padding: 18px; border-radius: var(--radius-md); border: 1px solid var(--border-base);">
+              <div style="font-weight: 700; margin-bottom: 6px;">Bridged Instagram Account</div>
+              <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px;">
+                Direct messages from this account are automatically synced to forum topics in your Telegram group.
+              </div>
+              <div style="display: flex; gap: 8px;">
+                <select id="select-bridged-account" style="flex: 1;" onchange="attachSpecificAccount(this.value)">
+                  <option value="">No accounts added</option>
+                </select>
+                <button class="btn" onclick="navigateTo('accounts')">Manage All</button>
+              </div>
+            </div>
+
+            <div style="background: var(--bg-surface-elevated); padding: 18px; border-radius: var(--radius-md); border: 1px solid var(--border-base);">
+              <div style="font-weight: 700; margin-bottom: 6px;">Telegram Forum Group</div>
+              <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 14px;">
+                Topics are created automatically for each direct message contact.
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between;">
+                <span id="label-quick-chat-id" class="mono" style="font-size: 12px; color: var(--text-muted);">Chat ID: Not set</span>
+                <button class="btn btn-subtle" onclick="navigateTo('telegram')">Configure Route →</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- VIEW 2: INSTAGRAM ACCOUNTS -->
+      <div id="view-accounts" class="view-panel" style="display: none;">
+        <section class="glass-card">
+          <div class="glass-card-header">
+            <div>
+              <h2 class="card-heading">Connected Instagram Accounts</h2>
+              <div class="card-caption" id="accounts-stats-label">Manage your accounts, check login health, or connect a new account.</div>
+            </div>
+            <button class="btn btn-primary" onclick="focusAddAccount()">+ Connect Instagram Account</button>
+          </div>
+
+          <div id="accounts-cards-container" class="accounts-grid"></div>
+        </section>
+
+        <!-- Connect Instagram Form -->
+        <section class="glass-card" id="add-account-card" style="margin-top: 22px;">
+          <div class="glass-card-header">
+            <div>
+              <h2 class="card-heading" id="auth-form-title">Connect Instagram Account</h2>
+              <div class="card-caption">Choose your preferred login method (Password, Browser Cookie, or Session JSON).</div>
+            </div>
+          </div>
+
+          <div class="box-tabs">
+            <button id="tab-btn-pw" class="active" onclick="setLoginTab('password')">Password</button>
+            <button id="tab-btn-ck" onclick="setLoginTab('cookie')">Browser Cookie</button>
+            <button id="tab-btn-js" onclick="setLoginTab('json')">Session JSON</button>
+          </div>
+
+          <div class="form-group">
             <label>Instagram Username</label>
-            <input type="text" id="ig-username" class="mono" placeholder="e.g. i.tompatrick" />
+            <input type="text" id="ig-form-username" class="mono" placeholder="e.g. your_instagram" />
           </div>
 
-          <!-- Tab 1: Password Login -->
-          <div id="pane-password">
-            <div class="form-2col">
-              <div class="field">
-                <label>Instagram Password <span id="pw-saved-badge" class="text-ok"></span></label>
-                <input type="password" id="ig-password" placeholder="Instagram password" />
+          <!-- Password Login Pane -->
+          <div id="pane-login-pw">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px;">
+              <div class="form-group">
+                <label>Instagram Password <span id="label-form-pw-saved" class="text-ok"></span></label>
+                <input type="password" id="ig-form-password" placeholder="Account password" />
               </div>
-              <div class="field">
-                <label>HTTP / SOCKS5 Proxy (Optional)</label>
-                <input type="text" id="ig-proxy" class="mono" placeholder="http://user:pass@host:port" />
+              <div class="form-group">
+                <label>HTTP/SOCKS5 Proxy (Optional)</label>
+                <input type="text" id="ig-form-proxy" class="mono" placeholder="http://user:pass@host:port" />
               </div>
             </div>
 
-            <details class="drawer">
-              <summary>2FA TOTP Secret &amp; Device Region Settings (Optional)</summary>
-              <div class="form-2col" style="margin-top: 10px;">
-                <div class="field">
-                  <label>2FA TOTP Secret (Base32) <span id="totp-saved-badge" class="text-ok"></span></label>
-                  <input type="password" id="ig-totp" class="mono" placeholder="Authenticator secret" />
+            <details style="margin-bottom: 18px; background: var(--bg-input); border: 1px solid var(--border-base); border-radius: var(--radius-sm); padding: 12px 16px;">
+              <summary style="cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text-muted); user-select: none;">
+                Advanced Device &amp; 2FA Settings (Optional)
+              </summary>
+              <div style="margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label>2FA Authenticator TOTP Secret</label>
+                  <input type="password" id="ig-form-totp" class="mono" placeholder="Base32 secret" />
                 </div>
-                <div class="field">
-                  <label>Challenge Phone Number</label>
-                  <input type="text" id="ig-phone" class="mono" placeholder="+1..." />
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label>Checkpoint Phone Number</label>
+                  <input type="text" id="ig-form-phone" class="mono" placeholder="+1..." />
                 </div>
-              </div>
-              <div class="form-2col">
-                <div class="field" style="margin-bottom: 0;">
+                <div class="form-group" style="margin-bottom: 0;">
                   <label>Locale &amp; Country</label>
                   <div style="display: flex; gap: 6px;">
-                    <input type="text" id="ig-locale" class="mono" placeholder="en_US" />
-                    <input type="text" id="ig-country" class="mono" placeholder="US" style="width: 78px;" />
+                    <input type="text" id="ig-form-locale" class="mono" placeholder="en_US" />
+                    <input type="text" id="ig-form-country" class="mono" placeholder="US" style="width: 75px;" />
                   </div>
                 </div>
-                <div class="field" style="margin-bottom: 0;">
-                  <label>Timezone Offset (Seconds)</label>
-                  <input type="number" id="ig-tz" class="mono" placeholder="e.g. 18000" />
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label>Timezone Offset (sec)</label>
+                  <input type="number" id="ig-form-tz" class="mono" placeholder="18000" />
                 </div>
               </div>
             </details>
 
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-              <span style="font-size: 12px; color: var(--text-muted);">Auto-enables Realtime MQTT &amp; FBNS</span>
-              <button class="primary" id="btn-pw-login" onclick="loginPassword()">Login with Password</button>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <span style="font-size: 12px; color: var(--text-dim);">Realtime MQTT &amp; FBNS are automatically enabled.</span>
+              <button class="btn btn-primary" id="btn-do-login" onclick="loginWithPassword()">Connect with Password</button>
             </div>
           </div>
 
-          <!-- Tab 2: Cookie Login -->
-          <div id="pane-cookie" style="display: none;">
-            <div class="field">
-              <label>Browser Cookie (sessionid value, Cookie header, or JSON cookie export)</label>
-              <textarea id="ig-cookie" class="mono" rows="3" placeholder="Paste sessionid cookie or full JSON cookie array"></textarea>
+          <!-- Cookie Login Pane -->
+          <div id="pane-login-ck" style="display: none;">
+            <div class="form-group">
+              <label>Browser Session Cookie (sessionid or raw Cookie header)</label>
+              <textarea id="ig-form-cookie" class="mono" rows="3" placeholder="Paste sessionid=... or full JSON cookie export"></textarea>
             </div>
-            <div class="field">
-              <label>HTTP / SOCKS5 Proxy (Optional)</label>
-              <input type="text" id="ig-cookie-proxy" class="mono" placeholder="http://user:pass@host:port" />
+            <div class="form-group">
+              <label>HTTP/SOCKS5 Proxy (Optional)</label>
+              <input type="text" id="ig-form-cookie-proxy" class="mono" placeholder="http://user:pass@host:port" />
             </div>
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
-              <span style="font-size: 12px; color: var(--text-muted);">Auto-disables Realtime MQTT &amp; FBNS</span>
-              <button class="primary" id="btn-ck-login" onclick="loginCookie()">Login with Cookie</button>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <span style="font-size: 12px; color: var(--text-dim);">Cookie login runs via background polling.</span>
+              <button class="btn btn-primary" id="btn-do-cookie-login" onclick="loginWithCookie()">Connect with Cookie</button>
             </div>
           </div>
 
-          <!-- Tab 3: Session JSON -->
-          <div id="pane-json" style="display: none;">
-            <div class="field">
-              <label>Paste instagrapi Session JSON or Upload .json File</label>
-              <textarea id="ig-session-json" class="mono" rows="3" placeholder='{"uuids": {...}, "authorization_data": {...}}'></textarea>
+          <!-- Session JSON Pane -->
+          <div id="pane-login-js" style="display: none;">
+            <div class="form-group">
+              <label>instagrapi Session JSON</label>
+              <textarea id="ig-form-json" class="mono" rows="3" placeholder='{"uuids": {...}, "authorization_data": {...}}'></textarea>
             </div>
             <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
-              <input type="file" accept=".json,application/json" onchange="loadJsonFile(event)" style="font-size: 12px; max-width: 230px;" />
-              <button class="primary" onclick="importSession()">Import &amp; Verify Session</button>
+              <input type="file" accept=".json,application/json" onchange="readSessionJsonFile(event)" style="font-size: 12px; max-width: 240px;" />
+              <button class="btn btn-primary" onclick="importSessionJson()">Import &amp; Verify Session</button>
             </div>
           </div>
 
-          <div id="auth-feedback" style="font-size: 12.5px; margin-top: 12px; min-height: 18px;"></div>
+          <div id="login-feedback-msg" style="font-size: 12.5px; margin-top: 14px; min-height: 18px;"></div>
+        </section>
+      </div>
 
-          <!-- Simulated Android Device & Session Actions -->
-          <div style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border);">
-            <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px;">
-              Simulated Android Device &amp; Session Telemetry
-            </div>
-            <pre id="device-info-pre" class="mono" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px; font-size: 11.5px; color: var(--text-secondary); margin: 0 0 12px 0; white-space: pre-wrap;">No active session</pre>
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <button id="btn-reset-device" onclick="resetDevice()" disabled>Reset Device UUID</button>
-              <button id="btn-logout-slot" onclick="logoutSlot()" disabled>Logout IG</button>
-              <button id="btn-remove-slot" class="danger" onclick="removeSlot()" style="margin-left: auto;" disabled>Remove Account</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Right Card: Telegram Bot Routing, Bridged Topics & Direct Command Bar -->
-        <div id="sec-telegram" class="card">
-          <div class="card-header">
+      <!-- VIEW 3: TELEGRAM ROUTE -->
+      <div id="view-telegram" class="view-panel" style="display: none;">
+        <section class="glass-card">
+          <div class="glass-card-header">
             <div>
-              <h2 class="card-title">Telegram Bot &amp; Forum Group Routing</h2>
-              <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
-                Commands execute directly in your Bot DM · Forum Group hosts DM topics
+              <h2 class="card-heading">Telegram Supergroup &amp; Bot Routing</h2>
+              <div class="card-caption">Configure the Telegram supergroup where direct messages are hosted as forum topics.</div>
+            </div>
+            <span id="tg-panel-status" class="mono text-warn" style="font-size: 12.5px;">Not connected</span>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div class="form-group">
+              <label>Telegram Forum Supergroup ID</label>
+              <input type="text" id="tg-field-chat" class="mono" placeholder="-1001234567890" />
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">Group must have Forum Topics enabled in Telegram settings.</div>
+            </div>
+
+            <div class="form-group">
+              <label>Admin User ID</label>
+              <input type="text" id="tg-field-admin" class="mono" placeholder="Your Telegram user ID" />
+              <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">Enables admin command controls in Telegram direct messages.</div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Bot Token (Optional BotFather Token Override)</label>
+            <input type="password" id="tg-field-token" class="mono" placeholder="Paste custom BotFather token to override default bot" />
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;">
+            <span id="tg-save-status-msg" style="font-size: 12px;"></span>
+            <button class="btn btn-primary" onclick="saveTelegramSettings()">Save Telegram Settings</button>
+          </div>
+
+          <!-- Topics Explorer -->
+          <div style="padding-top: 20px; border-top: 1px solid var(--border-subtle);">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+              <div>
+                <div style="font-weight: 700;">Active Thread Topics</div>
+                <div style="font-size: 12px; color: var(--text-muted);">Each Instagram user conversation creates a dedicated topic in your supergroup.</div>
               </div>
-            </div>
-            <span id="tg-conn-label" class="text-warn" style="font-size: 12px; font-weight: 600;">Not connected</span>
-          </div>
-
-          <div class="form-2col">
-            <div class="field">
-              <label>Forum Group Chat ID (Topics)</label>
-              <input type="text" id="tg-chat-id" class="mono" placeholder="-1001234567890" />
-            </div>
-            <div class="field">
-              <label>Telegram Admin User ID (Bot DM)</label>
-              <input type="text" id="tg-admin-id" class="mono" placeholder="Numeric user ID" />
-            </div>
-          </div>
-
-          <div class="field">
-            <label>Telegram Bot Token (Set or Override BotFather Token)</label>
-            <input type="password" id="tg-token" class="mono" placeholder="Paste BotFather token to set or update bot" />
-          </div>
-
-          <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 18px;">
-            <span id="tg-feedback" style="font-size: 12px; color: var(--text-secondary);"></span>
-            <button class="primary" onclick="saveTelegram()">Save Telegram Settings</button>
-          </div>
-
-          <div style="padding-top: 16px; border-top: 1px solid var(--border);">
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
-              <span style="font-size: 13px; font-weight: 700;">Direct Bot Command Runner &amp; Bridged Topics</span>
-              <span id="topics-count-label" class="mono" style="font-size: 12px; color: var(--text-secondary);">0 topics</span>
+              <span id="topics-count-badge" class="mono" style="font-size: 12px; color: var(--text-muted);">0 topics</span>
             </div>
 
-            <div style="display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap;">
-              <input type="text" id="cmd-input" class="mono" placeholder="Run command (/status, /session, /relogin, /help)" style="flex: 1;" />
-              <button class="primary" onclick="runBotCommand()">Run</button>
-              <button onclick="quickCmd('/status')">/status</button>
-              <button onclick="quickCmd('/session')">/session</button>
+            <div id="topics-list-container" style="background: var(--bg-input); border: 1px solid var(--border-base); border-radius: var(--radius-sm); max-height: 240px; overflow-y: auto; padding: 8px;"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- VIEW 4: LIVE CONSOLE & LOGS -->
+      <div id="view-console" class="view-panel" style="display: none;">
+        <section class="glass-card">
+          <div class="glass-card-header">
+            <div>
+              <h2 class="card-heading">Direct Bot Console &amp; Real-Time Logs</h2>
+              <div class="card-caption">Execute commands directly through the bridge and monitor live synchronization events.</div>
             </div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn" onclick="downloadLogs()">Download Logs</button>
+              <button class="btn btn-subtle" onclick="clearLogs()">Clear</button>
+            </div>
+          </div>
 
-            <div id="topics-list" style="background: var(--bg-input); border: 1px solid var(--border); border-radius: 10px; max-height: 175px; overflow-y: auto; padding: 10px 14px; font-size: 12px;"></div>
+          <!-- Command Bar -->
+          <div style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;">
+            <input type="text" id="cmd-input-field" class="mono" placeholder="Type a bot command (/status, /session, /help, /relogin)" style="flex: 1; min-width: 250px;" />
+            <button class="btn btn-primary" onclick="runCommand()">Run Command</button>
+            <button class="btn" onclick="runPreset('/status')">/status</button>
+            <button class="btn" onclick="runPreset('/session')">/session</button>
+            <button class="btn" onclick="runPreset('/help')">/help</button>
           </div>
-        </div>
-      </section>
 
-      <!-- Live Logs Console -->
-      <section id="sec-logs" class="card">
-        <div class="card-header" style="margin-bottom: 12px; padding-bottom: 12px;">
-          <div>
-            <h2 class="card-title">Live Workspace Logs</h2>
-            <div style="font-size: 12px; color: var(--text-secondary);">Real-time stream for your authenticated workspace</div>
+          <!-- Terminal -->
+          <div id="terminal-output-box" class="terminal-box mono"></div>
+        </section>
+      </div>
+
+      <!-- VIEW 5: SETTINGS & DEVICE -->
+      <div id="view-settings" class="view-panel" style="display: none;">
+        <section class="glass-card">
+          <div class="glass-card-header">
+            <div>
+              <h2 class="card-heading">Device Identity &amp; Session Management</h2>
+              <div class="card-caption">Manage simulated Android hardware fingerprint, realtime MQTT channels, and account backups.</div>
+            </div>
           </div>
-          <div style="display: flex; gap: 8px;">
-            <button onclick="downloadLogs()">Download Logs</button>
-            <button onclick="clearLogs()">Clear</button>
+
+          <div style="margin-bottom: 20px;">
+            <div style="font-weight: 700; margin-bottom: 6px;">Android Hardware &amp; Session State</div>
+            <pre id="device-telemetry-text" class="mono" style="background: var(--bg-input); border: 1px solid var(--border-base); border-radius: var(--radius-sm); padding: 14px; font-size: 11.5px; color: var(--text-muted); max-height: 160px; overflow-y: auto; white-space: pre-wrap;">No session data</pre>
           </div>
-        </div>
-        <div id="log-box" class="log-console mono"></div>
-      </section>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: var(--bg-surface-elevated); border: 1px solid var(--border-base); border-radius: var(--radius-sm); margin-bottom: 14px;">
+            <div>
+              <div style="font-weight: 600;">Realtime MQTT Connection</div>
+              <div style="font-size: 12px; color: var(--text-muted);">Direct connection to edge-mqtt.facebook.com for zero-latency direct messages.</div>
+            </div>
+            <input type="checkbox" class="apple-switch" id="sw-realtime-setting" onchange="toggleRealtimeOption('realtime', this.checked)" />
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: var(--bg-surface-elevated); border: 1px solid var(--border-base); border-radius: var(--radius-sm); margin-bottom: 24px;">
+            <div>
+              <div style="font-weight: 600;">FBNS Push Notifications</div>
+              <div style="font-size: 12px; color: var(--text-muted);">Facebook Notification Service socket for push messages.</div>
+            </div>
+            <input type="checkbox" class="apple-switch" id="sw-fbns-setting" onchange="toggleRealtimeOption('fbns', this.checked)" />
+          </div>
+
+          <div style="padding-top: 18px; border-top: 1px solid var(--border-subtle); display: flex; gap: 10px; flex-wrap: wrap;">
+            <button class="btn" id="btn-device-uuid-reset" onclick="resetDeviceIdentity()">Reset Device UUID</button>
+            <button class="btn" id="btn-account-logout" onclick="logoutAccount()">Log Out Account</button>
+            <button class="btn btn-danger" id="btn-account-remove" onclick="removeAccount()" style="margin-left: auto;">Remove Account</button>
+          </div>
+        </section>
+      </div>
 
     </main>
+
+    <!-- Global Toast Notification -->
+    <div id="global-toast"></div>
   </div>
 
   <script>
-    let currentUser = localStorage.getItem('hib_auth_user') || '';
-    let authToken = localStorage.getItem('hib_auth_token') || '';
-    let gateMode = 'login';
-    let activeIg = '';
-    let authTab = 'password';
-    let lastLogId = 0;
-    let logs = [];
-    let hydratedKey = '';
+    let currentAuthUser = localStorage.getItem('hib_auth_user') || '';
+    let currentAuthToken = localStorage.getItem('hib_auth_token') || '';
+    let activeTab = 'overview';
+    let authMode = 'login';
+    let selectedAccountName = '';
+    let loginTab = 'password';
+    let latestLogId = 0;
+    let logItems = [];
 
-    function setActiveNav(el) {
-      document.querySelectorAll('#top-pill-nav a').forEach(a => a.classList.remove('active'));
-      el.classList.add('active');
+    function showToast(msg, isErr = false) {
+      const toastEl = document.getElementById('global-toast');
+      toastEl.textContent = msg;
+      toastEl.style.display = 'flex';
+      toastEl.style.borderColor = isErr ? 'var(--err)' : 'var(--ig-pink)';
+      setTimeout(() => { toastEl.style.display = 'none'; }, 3200);
     }
 
-    function setGateMode(mode) {
-      gateMode = mode;
-      document.getElementById('gate-tab-login').className = mode === 'login' ? 'active' : '';
-      document.getElementById('gate-tab-register').className = mode === 'register' ? 'active' : '';
-      document.getElementById('gate-pw-label').textContent = mode === 'login' ? 'Workspace Password' : 'Create Workspace Password (min 4 chars)';
-      document.getElementById('gate-submit-btn').textContent = mode === 'login' ? 'Sign In to Workspace' : 'Create & Open Workspace';
-      document.getElementById('gate-error').textContent = '';
-    }
+    function navigateTo(tabName) {
+      activeTab = tabName;
 
-    function toggleGatePw() {
-      const inp = document.getElementById('gate-password');
-      inp.type = inp.type === 'password' ? 'text' : 'password';
-    }
+      // Update Desktop Tabs
+      document.querySelectorAll('#desktop-tabs-nav button').forEach((btn, idx) => {
+        const tabs = ['overview', 'accounts', 'telegram', 'console', 'settings'];
+        btn.classList.toggle('active', tabs[idx] === tabName);
+      });
 
-    async function api(path, options = {}) {
-      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-      if (authToken) headers['X-Auth-Token'] = authToken;
-      const res = await fetch(path, { ...options, headers });
-      const data = await res.json();
-      if (res.status === 401 && path.startsWith('/api/users/')) {
-        signOutWorkspace();
-        throw new Error(data.error || 'Please sign in to access this workspace.');
+      // Update Mobile Bottom Dock
+      document.querySelectorAll('#mobile-dock-nav button').forEach((btn, idx) => {
+        const tabs = ['overview', 'accounts', 'telegram', 'console', 'settings'];
+        btn.classList.toggle('active', tabs[idx] === tabName);
+      });
+
+      // Show Selected View
+      ['overview', 'accounts', 'telegram', 'console', 'settings'].forEach(v => {
+        const panel = document.getElementById(`view-${v}`);
+        if (panel) panel.style.display = (v === tabName) ? 'block' : 'none';
+      });
+
+      if (tabName === 'accounts' && !selectedAccountName) {
+        document.getElementById('add-account-card').scrollIntoView({ behavior: 'smooth' });
       }
-      if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    }
+
+    function setAuthMode(mode) {
+      authMode = mode;
+      document.getElementById('gate-btn-signin').className = mode === 'login' ? 'active' : '';
+      document.getElementById('gate-btn-register').className = mode === 'register' ? 'active' : '';
+      document.getElementById('gate-pw-label').textContent = mode === 'login' ? 'Password' : 'Create Password';
+      document.getElementById('gate-submit-btn').textContent = mode === 'login' ? 'Sign In' : 'Create Account';
+      document.getElementById('gate-err-box').textContent = '';
+    }
+
+    function togglePasswordInput() {
+      const pass = document.getElementById('gate-pass');
+      pass.type = pass.type === 'password' ? 'text' : 'password';
+    }
+
+    async function apiCall(endpoint, options = {}) {
+      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      if (currentAuthToken) headers['X-Auth-Token'] = currentAuthToken;
+      const res = await fetch(endpoint, { ...options, headers });
+      const data = await res.json();
+      if (res.status === 401 && endpoint.startsWith('/api/users/')) {
+        signOutUser();
+        throw new Error(data.error || 'Session expired. Please sign in again.');
+      }
+      if (!res.ok) throw new Error(data.error || ('Server returned HTTP ' + res.status));
       return data;
     }
 
-    async function submitWorkspaceAuth() {
-      const uname = document.getElementById('gate-username').value.trim();
-      const pw = document.getElementById('gate-password').value.trim();
-      const errEl = document.getElementById('gate-error');
-      const btn = document.getElementById('gate-submit-btn');
+    async function submitAuth() {
+      const uname = document.getElementById('gate-user').value.trim();
+      const pw = document.getElementById('gate-pass').value.trim();
+      const errEl = document.getElementById('gate-err-box');
+      const submitBtn = document.getElementById('gate-submit-btn');
       errEl.textContent = '';
 
       if (!uname) {
-        errEl.textContent = 'Please enter your workspace username.';
+        errEl.textContent = 'Please enter your username.';
         return;
       }
       if (!pw || pw.length < 4) {
-        errEl.textContent = 'Please enter a password (at least 4 characters).';
+        errEl.textContent = 'Password must be at least 4 characters.';
         return;
       }
 
-      btn.disabled = true;
+      submitBtn.disabled = true;
       try {
-        const endpoint = gateMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-        const res = await api(endpoint, {
+        const url = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+        const res = await apiCall(url, {
           method: 'POST',
           body: JSON.stringify({ username: uname, password: pw })
         });
-        currentUser = res.username;
-        authToken = res.token;
-        localStorage.setItem('hib_auth_user', currentUser);
-        localStorage.setItem('hib_auth_token', authToken);
-        document.getElementById('gate-password').value = '';
-        activeIg = res.state.bridged_ig || res.state.active_ig || '';
-        logs = [];
-        lastLogId = 0;
-        hydratedKey = '';
-        await syncAuthUI();
-      } catch (e) {
-        errEl.textContent = e.message;
+        currentAuthUser = res.username;
+        currentAuthToken = res.token;
+        localStorage.setItem('hib_auth_user', currentAuthUser);
+        localStorage.setItem('hib_auth_token', currentAuthToken);
+        document.getElementById('gate-pass').value = '';
+        selectedAccountName = res.state.bridged_ig || res.state.active_ig || '';
+        logItems = [];
+        latestLogId = 0;
+        await syncSessionState();
+        showToast(`Welcome @${currentAuthUser}!`);
+      } catch (err) {
+        errEl.textContent = err.message;
       } finally {
-        btn.disabled = false;
+        submitBtn.disabled = false;
       }
     }
 
-    function signOutWorkspace() {
-      currentUser = '';
-      authToken = '';
+    function signOutUser() {
+      currentAuthUser = '';
+      currentAuthToken = '';
       localStorage.removeItem('hib_auth_user');
       localStorage.removeItem('hib_auth_token');
-      activeIg = '';
-      logs = [];
-      lastLogId = 0;
-      hydratedKey = '';
-      syncAuthUI();
+      selectedAccountName = '';
+      logItems = [];
+      latestLogId = 0;
+      syncSessionState();
     }
 
-    async function syncAuthUI() {
-      const gate = document.getElementById('auth-gate');
-      const dash = document.getElementById('dashboard-view');
-      const pillNav = document.getElementById('top-pill-nav');
-      const topUser = document.getElementById('top-user-zone');
+    async function syncSessionState() {
+      const authScreen = document.getElementById('auth-screen');
+      const dashboard = document.getElementById('dashboard-content');
+      const desktopTabs = document.getElementById('desktop-tabs-nav');
+      const mobileDock = document.getElementById('mobile-dock-nav');
+      const userZone = document.getElementById('header-user-zone');
 
-      if (!currentUser || !authToken) {
-        gate.style.display = 'flex';
-        dash.style.display = 'none';
-        pillNav.style.display = 'none';
-        topUser.innerHTML = `<span style="font-size: 12px; color: var(--text-muted);">Authentication Required</span>`;
+      if (!currentAuthUser || !currentAuthToken) {
+        authScreen.style.display = 'flex';
+        dashboard.style.display = 'none';
+        desktopTabs.style.display = 'none';
+        mobileDock.style.display = 'none';
+        userZone.innerHTML = `<span style="font-size: 12px; color: var(--text-dim);">Authentication Required</span>`;
         return;
       }
 
-      gate.style.display = 'none';
-      dash.style.display = 'flex';
-      pillNav.style.display = 'flex';
-      topUser.innerHTML = `
-        <div class="avatar-circle">${escapeHtml(currentUser.slice(0, 2))}</div>
-        <div style="line-height: 1.25;">
-          <div style="font-weight: 700; font-size: 13px;" class="mono">@${escapeHtml(currentUser)}</div>
-          <div style="font-size: 11px; color: var(--text-muted);">Workspace Admin</div>
+      authScreen.style.display = 'none';
+      dashboard.style.display = 'block';
+      desktopTabs.style.display = 'flex';
+      mobileDock.style.display = 'flex';
+      userZone.innerHTML = `
+        <div class="user-tag">
+          <div class="user-avatar-dot">${escapeHtml(currentAuthUser.slice(0, 2))}</div>
+          <span class="mono" style="font-weight: 700;">@${escapeHtml(currentAuthUser)}</span>
         </div>
-        <button onclick="signOutWorkspace()" style="padding: 6px 11px; font-size: 11.5px; margin-left: 4px;">Sign Out</button>
+        <button onclick="signOutUser()" class="btn btn-subtle" style="padding: 5px 10px; font-size: 11.5px;">Sign Out</button>
       `;
       await refreshState();
     }
 
-    function setAuthTab(tab) {
-      authTab = tab;
-      document.getElementById('tab-pw').className = tab === 'password' ? 'active' : '';
-      document.getElementById('tab-ck').className = tab === 'cookie' ? 'active' : '';
-      document.getElementById('tab-js').className = tab === 'json' ? 'active' : '';
-      document.getElementById('pane-password').style.display = tab === 'password' ? 'block' : 'none';
-      document.getElementById('pane-cookie').style.display = tab === 'cookie' ? 'block' : 'none';
-      document.getElementById('pane-json').style.display = tab === 'json' ? 'block' : 'none';
-      document.getElementById('auth-mode-caption').textContent =
-        tab === 'password'
-          ? 'Password login automatically enables Realtime MQTT & FBNS'
-          : (tab === 'cookie' ? 'Cookie login automatically disables Realtime MQTT & FBNS' : 'Restore an instagrapi session JSON file');
+    function setLoginTab(method) {
+      loginTab = method;
+      document.getElementById('tab-btn-pw').className = method === 'password' ? 'active' : '';
+      document.getElementById('tab-btn-ck').className = method === 'cookie' ? 'active' : '';
+      document.getElementById('tab-btn-js').className = method === 'json' ? 'active' : '';
+      document.getElementById('pane-login-pw').style.display = method === 'password' ? 'block' : 'none';
+      document.getElementById('pane-login-ck').style.display = method === 'cookie' ? 'block' : 'none';
+      document.getElementById('pane-login-js').style.display = method === 'json' ? 'block' : 'none';
     }
 
-    function selectIgAccount(igName) {
-      activeIg = igName;
-      hydratedKey = '';
-      document.getElementById('auth-feedback').textContent = '';
-      if (igName === '__NEW__') {
-        document.getElementById('ig-username').value = '';
-        document.getElementById('ig-password').value = '';
-        document.getElementById('ig-cookie').value = '';
-        document.getElementById('ig-proxy').value = '';
-        document.getElementById('ig-cookie-proxy').value = '';
-        document.getElementById('sec-auth').scrollIntoView({ behavior: 'smooth' });
+    function selectAccount(name) {
+      selectedAccountName = name;
+      document.getElementById('login-feedback-msg').textContent = '';
+      if (name === '__NEW__') {
+        document.getElementById('ig-form-username').value = '';
+        document.getElementById('ig-form-password').value = '';
+        document.getElementById('ig-form-cookie').value = '';
+        document.getElementById('ig-form-proxy').value = '';
+        document.getElementById('auth-form-title').textContent = 'Connect Instagram Account';
+      } else {
+        document.getElementById('auth-form-title').textContent = `Manage @${name}`;
       }
       refreshState();
     }
 
+    function focusAddAccount() {
+      selectAccount('__NEW__');
+      document.getElementById('add-account-card').scrollIntoView({ behavior: 'smooth' });
+    }
+
     async function refreshState() {
-      if (!currentUser || !authToken) return;
+      if (!currentAuthUser || !currentAuthToken) return;
       try {
-        const st = await api(`/api/users/${encodeURIComponent(currentUser)}/state`);
-        document.getElementById('hero-greeting').textContent = `Welcome back, @${st.username} 👋`;
-        document.getElementById('kpi-storage-badge').textContent = st.storage_backend || 'MongoDB';
+        const state = await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/state`);
+        const accounts = state.accounts || [];
 
-        if (st.tg_bot_username) {
-          document.getElementById('bot-dm-hint').innerHTML =
-            `Bot <strong class="mono">@${escapeHtml(st.tg_bot_username)}</strong> online · Send <code class="mono">/start</code> in DM`;
-        } else if (st.tg_error) {
-          document.getElementById('bot-dm-hint').innerHTML =
-            `<span class="text-warn">${escapeHtml(st.tg_error.slice(0, 72))}</span>`;
+        if (!selectedAccountName) {
+          selectedAccountName = state.bridged_ig || state.active_ig || (accounts[0] ? accounts[0].ig_username : '__NEW__');
+        }
+        if (selectedAccountName !== '__NEW__' && !accounts.some(a => a.ig_username === selectedAccountName)) {
+          selectedAccountName = accounts[0] ? accounts[0].ig_username : '__NEW__';
         }
 
-        const accounts = st.accounts || [];
-        if (!activeIg) {
-          activeIg = st.bridged_ig || st.active_ig || (accounts[0] ? accounts[0].ig_username : '__NEW__');
+        const slot = accounts.find(a => a.ig_username === selectedAccountName) || null;
+        const bridgeEnabled = state.bridge_enabled !== false;
+
+        // Forwarding Switch
+        const masterSwitch = document.getElementById('sw-forwarding-master');
+        masterSwitch.checked = bridgeEnabled;
+        masterSwitch.disabled = accounts.length === 0;
+        const statusText = document.getElementById('quick-bridge-status-text');
+        statusText.textContent = bridgeEnabled ? 'Forwarding Active ✓' : 'Forwarding Paused';
+        statusText.className = bridgeEnabled ? 'mono text-ok' : 'mono text-warn';
+
+        // Bridged Account Select
+        const bridgedSelect = document.getElementById('select-bridged-account');
+        bridgedSelect.innerHTML = accounts.length
+          ? accounts.map(a => `<option value="${escapeHtml(a.ig_username)}" ${a.ig_username === state.bridged_ig ? 'selected' : ''}>@${escapeHtml(a.ig_username)} ${a.ig_username === state.bridged_ig ? '★ (Bridged)' : ''} ${a.ig_logged_in ? '· online' : '· offline'}</option>`).join('')
+          : '<option value="">No accounts added</option>';
+        bridgedSelect.disabled = accounts.length === 0;
+
+        document.getElementById('label-quick-chat-id').textContent = state.tg_chat_id ? `Forum Chat: ${state.tg_chat_id}` : 'Forum Chat: Not set';
+
+        // Spotlight
+        if (slot) {
+          document.getElementById('hero-avatar').textContent = slot.ig_username.slice(0, 2).toUpperCase();
+          document.getElementById('hero-account-handle').textContent = '@' + slot.ig_username;
+          document.getElementById('hero-account-status').textContent = slot.ig_logged_in ? 'Online' : (slot.login_in_progress ? 'Connecting...' : 'Logged Out');
+          document.getElementById('hero-account-status').className = slot.ig_logged_in ? 'text-ok' : 'text-warn';
+          document.getElementById('hero-dot').className = 'status-dot' + (slot.ig_logged_in ? '' : ' warn');
+          document.getElementById('hero-bridge-status').textContent =
+            !bridgeEnabled ? 'Bridge Paused' : (slot.attached_to_bridge ? 'Attached to Telegram ✓' : 'Standby');
+          document.getElementById('hero-bot-name').textContent = state.tg_bot_username ? ('@' + state.tg_bot_username) : (state.tg_running ? 'Bot Active' : 'No Bot');
+
+          document.getElementById('metric-ig-state').textContent = slot.ig_logged_in ? 'Online' : 'Offline';
+          document.getElementById('metric-ig-state').className = 'metric-val tabular ' + (slot.ig_logged_in ? 'text-ok' : 'text-warn');
+          document.getElementById('metric-ig-login-method').textContent = slot.login_method || 'none';
+          document.getElementById('metric-ig-name').textContent = '@' + slot.ig_username;
+
+          document.getElementById('metric-tg-state').textContent = !bridgeEnabled ? 'Paused' : (slot.attached_to_bridge ? 'Active' : 'Standby');
+          document.getElementById('metric-tg-state').className = 'metric-val tabular ' + (bridgeEnabled && slot.attached_to_bridge ? 'text-ok' : '');
+          document.getElementById('metric-tg-bot-handle').textContent = state.tg_bot_username ? ('@' + state.tg_bot_username) : (state.tg_running ? 'Running' : 'Check Token');
+          document.getElementById('metric-tg-chat-id').textContent = state.tg_chat_id ? `Chat: ${state.tg_chat_id}` : 'Chat: unset';
+
+          document.getElementById('metric-sync-events').textContent = String(slot.rt_events || 0);
+          document.getElementById('metric-sync-state').textContent =
+            slot.realtime ? (slot.rt_connected ? 'MQTT Connected' : 'MQTT Enabled') : 'Polling Mode';
+          document.getElementById('metric-sync-host').textContent = slot.rt_error ? slot.rt_error.slice(0, 26) : 'edge-mqtt.facebook.com';
+
+          document.getElementById('metric-dms-forwarded').textContent = String(slot.forwarded || 0);
+          document.getElementById('metric-topics-count').textContent = `${slot.linked_topics} topics linked`;
+          document.getElementById('metric-db-info').textContent = `DB: ${state.storage_backend || 'MongoDB'}`;
+
+          const attachBtn = document.getElementById('btn-hero-attach');
+          if (slot.attached_to_bridge) {
+            attachBtn.textContent = 'Attached ✓';
+            attachBtn.disabled = true;
+          } else {
+            attachBtn.textContent = 'Attach to Telegram';
+            attachBtn.disabled = false;
+          }
+
+          document.getElementById('btn-hero-relogin').disabled = !slot.ig_logged_in && !slot.has_saved_session;
+          document.getElementById('btn-hero-export').disabled = !slot.ig_logged_in && !slot.has_saved_session;
+
+          document.getElementById('device-telemetry-text').textContent = slot.session_info || 'No session data';
+          document.getElementById('sw-realtime-setting').checked = Boolean(slot.realtime);
+          document.getElementById('sw-fbns-setting').checked = Boolean(slot.fbns);
+          document.getElementById('btn-device-uuid-reset').disabled = false;
+          document.getElementById('btn-account-logout').disabled = !slot.ig_logged_in;
+          document.getElementById('btn-account-remove').disabled = false;
+
+          // Challenge
+          const challengeBox = document.getElementById('challenge-box');
+          if (slot.waiting_for_code) {
+            challengeBox.style.display = 'flex';
+            document.getElementById('challenge-hint').textContent = slot.code_hint || 'Enter the verification code sent by Instagram.';
+          } else {
+            challengeBox.style.display = 'none';
+          }
+
+          // Topics
+          document.getElementById('topics-count-badge').textContent = `${slot.linked_topics} topics`;
+          const tList = document.getElementById('topics-list-container');
+          if (!slot.topics || slot.topics.length === 0) {
+            tList.innerHTML = '<div style="color: var(--text-dim); padding: 10px; font-size: 12px;">No active topics linked yet.</div>';
+          } else {
+            tList.innerHTML = slot.topics.map(t => `
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); font-size: 12px;">
+                <span class="mono">${escapeHtml(t.title)} <span style="color: var(--text-dim);">→ #${t.topic_id}</span></span>
+                <button class="btn btn-subtle" onclick="unlinkTopic('${t.thread_id}')" style="padding: 2px 8px; font-size: 11px;">Unlink</button>
+              </div>
+            `).join('');
+          }
+        } else {
+          document.getElementById('hero-account-handle').textContent = 'Connect Account';
+          document.getElementById('hero-avatar').textContent = '+';
+          document.getElementById('hero-account-status').textContent = 'No Account';
+          document.getElementById('metric-ig-state').textContent = 'None';
+          document.getElementById('btn-hero-attach').disabled = true;
+          document.getElementById('btn-hero-relogin').disabled = true;
+          document.getElementById('btn-hero-export').disabled = true;
+          document.getElementById('challenge-box').style.display = 'none';
+          document.getElementById('topics-count-badge').textContent = '0 topics';
+          document.getElementById('topics-list-container').innerHTML = '<div style="color: var(--text-dim); padding: 10px; font-size: 12px;">Connect an account to link topics.</div>';
         }
-        if (activeIg !== '__NEW__' && !accounts.some(a => a.ig_username === activeIg)) {
-          activeIg = accounts[0] ? accounts[0].ig_username : '__NEW__';
-        }
 
-        // Keep the dedicated Settings panel in sync with saved workspace state.
-        const bridgeEnabled = st.bridge_enabled !== false;
-        const bridgeSwitch = document.getElementById('sw-bridge');
-        bridgeSwitch.checked = bridgeEnabled;
-        bridgeSwitch.disabled = accounts.length === 0;
-        const bridgeStatus = document.getElementById('settings-bridge-status');
-        bridgeStatus.textContent = bridgeEnabled ? 'Bridge enabled' : 'Bridge paused';
-        bridgeStatus.className = bridgeEnabled ? 'text-ok' : 'text-warn';
-        document.getElementById('settings-bridge-hint').textContent =
-          !accounts.length
-            ? 'Add an Instagram account to enable routing.'
-            : (!st.tg_chat_id
-                ? 'Choose an account, then configure the Telegram bot and Forum Group ID below.'
-                : (!bridgeEnabled
-                ? 'Forwarding is paused. Your saved sessions remain connected.'
-                : (st.tg_running ? 'Routing is connected for the selected account.' : 'Bridge is enabled but not connected. Check the bot token, group ID and group permissions.')));
+        // Render Accounts Cards
+        document.getElementById('accounts-stats-label').textContent =
+          `${accounts.length} account${accounts.length === 1 ? '' : 's'} registered · ${accounts.filter(a => a.ig_logged_in).length} currently active`;
 
-        const bridgeSelect = document.getElementById('bridge-account-select');
-        bridgeSelect.innerHTML = accounts.length
-          ? accounts.map(a => '<option value="' + escapeHtml(a.ig_username) + '">' + escapeHtml(a.ig_username) +
-              (a.ig_username === st.bridged_ig ? ' (bridged)' : '') +
-              (a.ig_logged_in ? ' · online' : ' · offline') + '</option>').join('')
-          : '<option value="">Add an Instagram account first</option>';
-        bridgeSelect.value = accounts.some(a => a.ig_username === st.bridged_ig) ? st.bridged_ig : (accounts[0] ? accounts[0].ig_username : '');
-        bridgeSelect.disabled = accounts.length === 0;
-        document.getElementById('btn-bridge-attach').disabled =
-          !bridgeSelect.value || (bridgeSelect.value === st.bridged_ig && bridgeEnabled);
-
-        const settingsListEl = document.getElementById('settings-account-list');
-        settingsListEl.innerHTML = accounts.length ? accounts.map(a => {
-          const isBridged = a.ig_username === st.bridged_ig;
-          return '<div class="account-row" style="cursor: default;">' +
-            '<div><div class="mono" style="font-weight: 700; font-size: 12.5px;">@' + escapeHtml(a.ig_username) + '</div>' +
-            '<div style="font-size: 11px; color: var(--text-secondary);"><span class="' + (a.ig_logged_in ? 'text-ok' : 'text-warn') + '">' +
-            (a.ig_logged_in ? 'Logged in' : 'Needs login') + '</span> · ' + a.linked_topics +
-            ' topics' + (isBridged ? ' · <span class="text-ok">Bridge account</span>' : '') + '</div></div>' +
-            '<div style="display: flex; align-items: center; gap: 5px;">' +
-            (isBridged && bridgeEnabled
-              ? '<span class="text-ok mono" style="font-size: 10.5px;">Active</span>'
-              : '<button onclick="event.stopPropagation(); attachSpecificAccount(\'' + escapeHtml(a.ig_username) + '\')" style="padding: 4px 8px; font-size: 10.5px;">Route</button>') +
-            '<button onclick="event.stopPropagation(); manageSettingsAccount(\'' + escapeHtml(a.ig_username) + '\')" style="padding: 4px 8px; font-size: 10.5px;">Manage</button>' +
-            '</div></div>';
-        }).join('') : '<div style="font-size: 12px; color: var(--text-muted); padding: 12px;">No Instagram accounts yet. Use “Add another account” to begin.</div>';
-
-        const onlineCount = accounts.filter(a => a.ig_logged_in).length;
-        document.getElementById('matrix-subtitle').textContent =
-          `${accounts.length} account(s) in workspace · ${onlineCount} logged in`;
-        document.getElementById('bridged-account-pill').textContent =
-          st.bridged_ig ? `Bridged: @${st.bridged_ig}` : 'Bridge: None';
-
-        const igListEl = document.getElementById('ig-list');
+        const cardsBox = document.getElementById('accounts-cards-container');
         if (accounts.length === 0) {
-          igListEl.innerHTML = `
-            <div style="padding: 18px; text-align: center; color: var(--text-muted); font-size: 12.5px;">
-              No Instagram accounts added yet. Use the Authentication Studio below to log in.
+          cardsBox.innerHTML = `
+            <div style="grid-column: 1 / -1; padding: 32px; text-align: center; color: var(--text-muted); font-size: 13px;">
+              No Instagram accounts connected yet. Fill out the form below to connect your first account.
             </div>
           `;
         } else {
-          igListEl.innerHTML = accounts.map(a => {
-            const isAct = a.ig_username === activeIg;
+          cardsBox.innerHTML = accounts.map(a => {
             const isBridged = a.attached_to_bridge;
-            const stText = a.ig_logged_in ? `Online (${a.login_method})` : 'Offline';
             return `
-              <div class="account-row ${isAct ? 'active' : ''}" onclick="selectIgAccount('${a.ig_username}')">
-                <div>
-                  <div class="mono" style="font-weight: 700; font-size: 13px;">@${escapeHtml(a.ig_username)}</div>
-                  <div style="font-size: 11px; color: var(--text-secondary);">
-                    <span class="${a.ig_logged_in ? 'text-ok' : 'text-warn'}">${stText}</span>
-                    · ${a.linked_topics} topics · ${a.forwarded} DMs
+              <div class="account-card-box ${isBridged ? 'active-bridge' : ''}" onclick="selectAccount('${a.ig_username}')">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <div class="user-avatar-dot" style="width: 32px; height: 32px; font-size: 12px;">${escapeHtml(a.ig_username.slice(0, 2))}</div>
+                    <div>
+                      <div class="mono" style="font-weight: 700; font-size: 13.5px;">@${escapeHtml(a.ig_username)}</div>
+                      <div style="font-size: 11px; color: var(--text-muted);">
+                        <span class="${a.ig_logged_in ? 'text-ok' : 'text-warn'}">${a.ig_logged_in ? 'Online (' + a.login_method + ')' : 'Offline'}</span>
+                        · ${a.linked_topics} topics
+                      </div>
+                    </div>
                   </div>
+                  ${isBridged ? `<span class="mono text-pink" style="font-size: 11px; font-weight: 700;">Bridged ★</span>` : ''}
                 </div>
-                <div style="display: flex; align-items: center; gap: 6px;">
-                  ${isBridged
-                    ? `<span class="text-ok mono" style="font-size: 11px; font-weight: 700;">Bridged ✓</span>`
-                    : `<button onclick="event.stopPropagation(); attachSpecificAccount('${a.ig_username}')" style="padding: 4px 9px; font-size: 11px;">Attach</button>`
-                  }
+
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+                  <span>${a.forwarded} DMs forwarded</span>
+                  <div style="display: flex; gap: 6px;">
+                    ${!isBridged ? `<button class="btn" onclick="event.stopPropagation(); attachDirectAccount('${a.ig_username}')" style="padding: 3px 9px; font-size: 11px;">Attach</button>` : ''}
+                    <button class="btn btn-subtle" onclick="event.stopPropagation(); selectAccount('${a.ig_username}')" style="padding: 3px 8px; font-size: 11px;">Edit</button>
+                  </div>
                 </div>
               </div>
             `;
           }).join('');
         }
 
-        const tgLabel = document.getElementById('tg-conn-label');
-        if (st.tg_running) {
-          tgLabel.textContent = `Connected${st.tg_bot_username ? ' (@' + st.tg_bot_username + ')' : ''}`;
-          tgLabel.className = 'text-ok';
-        } else if (st.tg_error) {
-          tgLabel.textContent = st.tg_error;
-          tgLabel.className = 'text-warn';
-        } else {
-          tgLabel.textContent = 'Set Group ID & Bot Token';
-          tgLabel.className = 'text-warn';
-        }
-
-        const slot = accounts.find(a => a.ig_username === activeIg) || null;
-        const hKey = `${currentUser}:${activeIg}`;
-        if (hydratedKey !== hKey) {
-          hydratedKey = hKey;
-          document.getElementById('tg-chat-id').value = st.tg_chat_id || '';
-          document.getElementById('tg-admin-id').value = st.tg_admin_id || '';
-          document.getElementById('tg-token').value = '';
-          document.getElementById('ig-username').value = slot ? slot.ig_username : '';
-          document.getElementById('ig-password').value = '';
-          document.getElementById('ig-proxy').value = slot ? slot.proxy : '';
-          document.getElementById('ig-cookie-proxy').value = slot ? slot.proxy : '';
-          document.getElementById('ig-phone').value = slot ? slot.phone_number : '';
-          document.getElementById('ig-locale').value = slot ? slot.locale : 'en_US';
-          document.getElementById('ig-country').value = slot ? slot.country : 'US';
-          document.getElementById('ig-tz').value = slot ? slot.timezone_offset : '';
-        }
-
-        const codeBanner = document.getElementById('code-banner');
-        if (slot && slot.waiting_for_code) {
-          codeBanner.style.display = 'flex';
-          document.getElementById('code-hint').textContent = slot.code_hint || 'Enter the verification code sent by Instagram.';
-        } else {
-          codeBanner.style.display = 'none';
-        }
-
+        // Form Fields
         if (slot) {
-          document.getElementById('hero-headline').textContent = `@${slot.ig_username} — Bridge Overview`;
-          document.getElementById('kpi-ig-status').textContent = slot.ig_logged_in ? 'Logged In' : (slot.login_in_progress ? 'Logging In' : 'Logged Out');
-          document.getElementById('kpi-ig-status').className = 'kpi-value tabular ' + (slot.ig_logged_in ? 'text-ok' : 'text-warn');
-          document.getElementById('kpi-ig-method').textContent = slot.login_method || 'none';
-          document.getElementById('kpi-ig-handle').textContent = '@' + slot.ig_username;
-
-          document.getElementById('kpi-bridge-state').textContent =
-            !bridgeEnabled ? 'Paused' : (slot.attached_to_bridge ? 'Attached' : 'Standby');
-          document.getElementById('kpi-bridge-state').className =
-            'kpi-value tabular ' + (bridgeEnabled && slot.attached_to_bridge ? 'text-ok' : '');
-          document.getElementById('kpi-bridge-bot').textContent = st.tg_bot_username ? ('@' + st.tg_bot_username) : (st.tg_running ? 'Active' : 'Check Token');
-          document.getElementById('kpi-bridge-group').textContent = st.tg_chat_id ? `Group: ${st.tg_chat_id}` : 'Group: unset';
-
-          const attachBtn = document.getElementById('btn-attach-bridge');
-          if (slot.attached_to_bridge) {
-            attachBtn.textContent = 'Attached to Bridge ✓';
-            attachBtn.className = 'success-btn';
-            attachBtn.disabled = true;
-          } else {
-            attachBtn.textContent = 'Attach to Bridge';
-            attachBtn.className = 'primary';
-            attachBtn.disabled = false;
-          }
-
-          const swRt = document.getElementById('sw-realtime');
-          const swFb = document.getElementById('sw-fbns');
-          swRt.disabled = false;
-          swFb.disabled = false;
-          swRt.checked = Boolean(slot.realtime);
-          swFb.checked = Boolean(slot.fbns);
-
-          document.getElementById('kpi-rt-state').textContent = slot.realtime ? (slot.rt_connected ? 'Connected' : 'Enabled') : 'OFF';
-          document.getElementById('kpi-rt-events').textContent = `${slot.rt_events} events`;
-          document.getElementById('kpi-rt-foot').textContent = slot.rt_error ? slot.rt_error.slice(0, 42) : 'edge-mqtt.facebook.com';
-
-          document.getElementById('kpi-fbns-state').textContent = slot.fbns ? (slot.fbns_connected ? 'Connected' : 'Enabled') : 'OFF';
-          document.getElementById('kpi-fbns-pushes').textContent = `${slot.fbns_pushes} pushes`;
-          document.getElementById('kpi-fbns-foot').textContent = slot.fbns_error ? slot.fbns_error.slice(0, 42) : 'mqtt-mini.facebook.com';
-
-          document.getElementById('kpi-topics-count').textContent = String(slot.linked_topics);
-          document.getElementById('kpi-forwarded-count').textContent = String(slot.forwarded);
-          document.getElementById('kpi-proxy-state').textContent = slot.proxy ? 'Proxy Active' : 'Direct';
-
-          document.getElementById('pw-saved-badge').textContent = slot.has_password ? '(Saved)' : '';
-          document.getElementById('totp-saved-badge').textContent = slot.has_totp ? '(Saved)' : '';
-          document.getElementById('device-info-pre').textContent = slot.session_info;
-
-          const canDl = slot.ig_logged_in || slot.has_saved_session;
-          document.getElementById('btn-hero-download').disabled = !canDl;
-          document.getElementById('btn-hero-relogin').disabled = !canDl;
-          document.getElementById('btn-reset-device').disabled = false;
-          document.getElementById('btn-logout-slot').disabled = !slot.ig_logged_in;
-          document.getElementById('btn-remove-slot').disabled = false;
-
-          document.getElementById('topics-count-label').textContent = `${slot.linked_topics} linked topics`;
-          const tBox = document.getElementById('topics-list');
-          if (!slot.topics || slot.topics.length === 0) {
-            tBox.innerHTML = '<div style="color: var(--text-muted);">No forum topics created yet for this account.</div>';
-          } else {
-            tBox.innerHTML = slot.topics.map(t => `
-              <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border);">
-                <span class="mono">${escapeHtml(t.title)} <span style="color: var(--text-muted);">→ Topic #${t.topic_id}</span></span>
-                <button onclick="unlinkTopic('${t.thread_id}')" style="padding: 3px 9px; font-size: 11px;">Unlink</button>
-              </div>
-            `).join('');
-          }
-        } else {
-          document.getElementById('hero-headline').textContent = `Here's Your Bridge Overview`;
-          document.getElementById('kpi-ig-status').textContent = 'New Slot';
-          document.getElementById('kpi-ig-status').className = 'kpi-value tabular text-warn';
-          document.getElementById('kpi-ig-method').textContent = 'ready';
-          document.getElementById('kpi-ig-handle').textContent = 'Add IG below';
-          document.getElementById('kpi-bridge-state').textContent = 'Standby';
-          document.getElementById('btn-attach-bridge').disabled = true;
-          document.getElementById('btn-hero-relogin').disabled = true;
-          document.getElementById('btn-hero-download').disabled = true;
-          document.getElementById('sw-realtime').disabled = true;
-          document.getElementById('sw-fbns').disabled = true;
-          document.getElementById('device-info-pre').textContent = 'No session loaded yet.';
-          document.getElementById('btn-reset-device').disabled = true;
-          document.getElementById('btn-logout-slot').disabled = true;
-          document.getElementById('btn-remove-slot').disabled = true;
-          document.getElementById('topics-count-label').textContent = '0 linked topics';
-          document.getElementById('topics-list').innerHTML = '<div style="color: var(--text-muted);">Log in to view linked Telegram topics.</div>';
+          document.getElementById('ig-form-username').value = slot.ig_username;
+          document.getElementById('ig-form-proxy').value = slot.proxy || '';
+          document.getElementById('ig-form-cookie-proxy').value = slot.proxy || '';
+          document.getElementById('ig-form-phone').value = slot.phone_number || '';
+          document.getElementById('ig-form-locale').value = slot.locale || 'en_US';
+          document.getElementById('ig-form-country').value = slot.country || 'US';
+          document.getElementById('ig-form-tz').value = slot.timezone_offset !== null ? slot.timezone_offset : '';
+          document.getElementById('label-form-pw-saved').textContent = slot.has_password ? '(Saved)' : '';
         }
 
-        await fetchLogs();
-      } catch (e) {
-        console.error(e);
+        // Telegram settings
+        document.getElementById('tg-field-chat').value = state.tg_chat_id || '';
+        document.getElementById('tg-field-admin').value = state.tg_admin_id || '';
+        const tgStatus = document.getElementById('tg-panel-status');
+        if (state.tg_running) {
+          tgStatus.textContent = `Connected${state.tg_bot_username ? ' (@' + state.tg_bot_username + ')' : ''}`;
+          tgStatus.className = 'mono text-ok';
+        } else if (state.tg_error) {
+          tgStatus.textContent = state.tg_error.slice(0, 36);
+          tgStatus.className = 'mono text-warn';
+        } else {
+          tgStatus.textContent = 'Not connected';
+          tgStatus.className = 'mono text-warn';
+        }
+
+        await fetchLogsStream();
+      } catch (err) {
+        console.error(err);
       }
     }
 
-    async function toggleBridge(enabled) {
-      if (!currentUser || !authToken) return;
-      const feedback = document.getElementById('settings-bridge-hint');
-      feedback.textContent = enabled ? 'Enabling bridge...' : 'Pausing bridge...';
+    async function toggleMasterForwarding(enabled) {
+      if (!currentAuthUser || !currentAuthToken) return;
       try {
-        await api('/api/users/' + encodeURIComponent(currentUser) + '/telegram/bridge', {
+        await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/telegram/bridge`, {
           method: 'POST',
           body: JSON.stringify({ enabled: Boolean(enabled) })
         });
+        showToast(enabled ? 'Forwarding enabled' : 'Forwarding paused');
         await refreshState();
-      } catch (e) {
-        feedback.textContent = e.message;
-        document.getElementById('sw-bridge').checked = !enabled;
+      } catch (err) {
+        showToast(err.message, true);
+        document.getElementById('sw-forwarding-master').checked = !enabled;
       }
     }
 
-    async function attachBridgeSelectedAccount() {
-      const igName = document.getElementById('bridge-account-select').value;
-      if (!igName) return;
-      await attachSpecificAccount(igName);
+    async function attachDirectAccount(name) {
+      if (!currentAuthUser || !name) return;
+      selectedAccountName = name;
+      try {
+        await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/attach`, {
+          method: 'POST',
+          body: JSON.stringify({ ig_username: name })
+        });
+        showToast(`Attached @${name} to Telegram`);
+        await refreshState();
+      } catch (err) {
+        showToast(err.message, true);
+      }
     }
 
-    function manageSettingsAccount(igName) {
-      selectIgAccount(igName);
-      document.getElementById('sec-auth').scrollIntoView({ behavior: 'smooth' });
+    async function attachActiveToTelegram() {
+      if (!currentAuthUser || !selectedAccountName || selectedAccountName === '__NEW__') return;
+      await attachDirectAccount(selectedAccountName);
     }
 
-    async function attachCurrentToBridge() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      await attachSpecificAccount(activeIg);
+    async function attachSpecificAccount(name) {
+      if (!name) return;
+      await attachDirectAccount(name);
     }
 
-    async function attachSpecificAccount(igName) {
-      if (!currentUser || !igName) return;
-      activeIg = igName;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/attach`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: igName })
-      });
-      await refreshState();
-    }
-
-    async function loginPassword() {
-      const igUser = document.getElementById('ig-username').value.trim();
-      const fb = document.getElementById('auth-feedback');
-      const btn = document.getElementById('btn-pw-login');
+    async function loginWithPassword() {
+      const igUser = document.getElementById('ig-form-username').value.trim();
+      const fb = document.getElementById('login-feedback-msg');
+      const btn = document.getElementById('btn-do-login');
       if (!igUser) {
-        fb.textContent = 'Enter the Instagram username first.';
+        fb.textContent = 'Please enter an Instagram handle.';
         fb.className = 'text-warn';
         return;
       }
       btn.disabled = true;
-      fb.textContent = 'Logging in with password (Realtime & FBNS auto-enabled)...';
+      fb.textContent = 'Connecting to Instagram...';
       fb.className = 'text-warn';
       try {
-        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/login`, {
+        const res = await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/login`, {
           method: 'POST',
           body: JSON.stringify({
             ig_username: igUser,
-            password: document.getElementById('ig-password').value,
-            proxy: document.getElementById('ig-proxy').value.trim(),
-            totp_secret: document.getElementById('ig-totp').value.trim(),
-            phone_number: document.getElementById('ig-phone').value.trim(),
-            locale: document.getElementById('ig-locale').value.trim(),
-            country: document.getElementById('ig-country').value.trim(),
-            timezone_offset: document.getElementById('ig-tz').value.trim()
+            password: document.getElementById('ig-form-password').value,
+            proxy: document.getElementById('ig-form-proxy').value.trim(),
+            totp_secret: document.getElementById('ig-form-totp').value.trim(),
+            phone_number: document.getElementById('ig-form-phone').value.trim(),
+            locale: document.getElementById('ig-form-locale').value.trim(),
+            country: document.getElementById('ig-form-country').value.trim(),
+            timezone_offset: document.getElementById('ig-form-tz').value.trim()
           })
         });
-        activeIg = res.ig_username || igUser;
-        hydratedKey = `${currentUser}:${activeIg}`;
+        selectedAccountName = res.ig_username || igUser;
         fb.textContent = res.message;
         fb.className = res.ok ? 'text-ok' : 'text-err';
+        showToast(res.message, !res.ok);
         await refreshState();
-      } catch (e) {
-        fb.textContent = e.message;
+      } catch (err) {
+        fb.textContent = err.message;
         fb.className = 'text-err';
       } finally {
         btn.disabled = false;
       }
     }
 
-    async function loginCookie() {
-      const igUser = document.getElementById('ig-username').value.trim();
-      const cookie = document.getElementById('ig-cookie').value.trim();
-      const proxy = document.getElementById('ig-cookie-proxy').value.trim();
-      const fb = document.getElementById('auth-feedback');
-      const btn = document.getElementById('btn-ck-login');
+    async function loginWithCookie() {
+      const igUser = document.getElementById('ig-form-username').value.trim();
+      const cookie = document.getElementById('ig-form-cookie').value.trim();
+      const proxy = document.getElementById('ig-form-cookie-proxy').value.trim();
+      const fb = document.getElementById('login-feedback-msg');
+      const btn = document.getElementById('btn-do-cookie-login');
       if (!igUser || !cookie) {
-        fb.textContent = 'Enter both the Instagram username and cookie.';
+        fb.textContent = 'Please enter handle and session cookie.';
         fb.className = 'text-warn';
         return;
       }
       btn.disabled = true;
-      fb.textContent = 'Logging in with cookie (Realtime & FBNS auto-disabled)...';
+      fb.textContent = 'Verifying browser cookie...';
       fb.className = 'text-warn';
       try {
-        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/cookie`, {
+        const res = await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/cookie`, {
           method: 'POST',
           body: JSON.stringify({ ig_username: igUser, cookie, proxy })
         });
-        activeIg = res.ig_username || igUser;
-        hydratedKey = `${currentUser}:${activeIg}`;
+        selectedAccountName = res.ig_username || igUser;
         fb.textContent = res.message;
         fb.className = res.ok ? 'text-ok' : 'text-err';
-        if (res.ok) document.getElementById('ig-cookie').value = '';
+        if (res.ok) document.getElementById('ig-form-cookie').value = '';
+        showToast(res.message, !res.ok);
         await refreshState();
-      } catch (e) {
-        fb.textContent = e.message;
+      } catch (err) {
+        fb.textContent = err.message;
         fb.className = 'text-err';
       } finally {
         btn.disabled = false;
       }
     }
 
-    function loadJsonFile(ev) {
+    function readSessionJsonFile(ev) {
       const f = ev.target.files && ev.target.files[0];
       if (!f) return;
-      const r = new FileReader();
-      r.onload = () => { document.getElementById('ig-session-json').value = r.result; };
-      r.readAsText(f);
+      const reader = new FileReader();
+      reader.onload = () => { document.getElementById('ig-form-json').value = reader.result; };
+      reader.readAsText(f);
     }
 
-    async function importSession() {
-      const igUser = document.getElementById('ig-username').value.trim();
-      const rawJson = document.getElementById('ig-session-json').value.trim();
-      const proxy = document.getElementById('ig-proxy').value.trim();
-      const fb = document.getElementById('auth-feedback');
+    async function importSessionJson() {
+      const igUser = document.getElementById('ig-form-username').value.trim();
+      const rawJson = document.getElementById('ig-form-json').value.trim();
+      const proxy = document.getElementById('ig-form-proxy').value.trim();
+      const fb = document.getElementById('login-feedback-msg');
       if (!igUser || !rawJson) {
-        fb.textContent = 'Enter the Instagram username and session JSON.';
+        fb.textContent = 'Please enter handle and session JSON.';
         fb.className = 'text-warn';
         return;
       }
-      fb.textContent = 'Importing and verifying session JSON...';
+      fb.textContent = 'Importing and verifying session...';
       fb.className = 'text-warn';
       try {
-        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/import`, {
+        const res = await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/import`, {
           method: 'POST',
           body: JSON.stringify({ ig_username: igUser, session_json: rawJson, proxy })
         });
-        activeIg = res.ig_username || igUser;
-        hydratedKey = `${currentUser}:${activeIg}`;
+        selectedAccountName = res.ig_username || igUser;
         fb.textContent = res.message;
         fb.className = res.ok ? 'text-ok' : 'text-err';
+        showToast(res.message, !res.ok);
         await refreshState();
-      } catch (e) {
-        fb.textContent = e.message;
+      } catch (err) {
+        fb.textContent = err.message;
         fb.className = 'text-err';
       }
     }
 
-    async function toggleRealtime(key, val) {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/toggle`, {
+    async function toggleRealtimeOption(key, val) {
+      if (!currentAuthUser || !selectedAccountName || selectedAccountName === '__NEW__') return;
+      await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/toggle`, {
         method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg, [key]: val })
+        body: JSON.stringify({ ig_username: selectedAccountName, [key]: val })
       });
+      showToast(`${key.toUpperCase()} set to ${val ? 'ON' : 'OFF'}`);
       await refreshState();
     }
 
-    async function reloginSlot() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      const fb = document.getElementById('auth-feedback');
-      fb.textContent = 'Re-logging in...';
-      fb.className = 'text-warn';
-      const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/relogin`, {
+    async function reloginActiveAccount() {
+      if (!currentAuthUser || !selectedAccountName || selectedAccountName === '__NEW__') return;
+      const res = await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/relogin`, {
         method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg })
+        body: JSON.stringify({ ig_username: selectedAccountName })
       });
-      fb.textContent = res.message;
-      fb.className = res.ok ? 'text-ok' : 'text-err';
+      showToast(res.message, !res.ok);
       await refreshState();
     }
 
-    async function resetDevice() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      const fb = document.getElementById('auth-feedback');
-      fb.textContent = 'Resetting device identity...';
-      fb.className = 'text-warn';
-      const res = await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/reset_device`, {
+    async function resetDeviceIdentity() {
+      if (!currentAuthUser || !selectedAccountName || selectedAccountName === '__NEW__') return;
+      if (!confirm(`Reset Android device UUID for @${selectedAccountName}?`)) return;
+      const res = await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/reset_device`, {
         method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg })
+        body: JSON.stringify({ ig_username: selectedAccountName })
       });
-      fb.textContent = res.message;
-      fb.className = res.ok ? 'text-ok' : 'text-warn';
+      showToast(res.message, !res.ok);
       await refreshState();
     }
 
-    async function logoutSlot() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/logout`, {
+    async function logoutAccount() {
+      if (!currentAuthUser || !selectedAccountName || selectedAccountName === '__NEW__') return;
+      if (!confirm(`Log out of Instagram for @${selectedAccountName}?`)) return;
+      await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/logout`, {
         method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg })
+        body: JSON.stringify({ ig_username: selectedAccountName })
       });
+      showToast(`Logged out @${selectedAccountName}`);
       await refreshState();
     }
 
-    async function removeSlot() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/remove`, {
+    async function removeAccount() {
+      if (!currentAuthUser || !selectedAccountName || selectedAccountName === '__NEW__') return;
+      if (!confirm(`Permanently remove @${selectedAccountName} from this app?`)) return;
+      await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/remove`, {
         method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg })
+        body: JSON.stringify({ ig_username: selectedAccountName })
       });
-      activeIg = '';
-      hydratedKey = '';
+      showToast(`Removed @${selectedAccountName}`);
+      selectedAccountName = '';
       await refreshState();
     }
 
-    function downloadActiveSession() {
-      if (!currentUser || !activeIg || activeIg === '__NEW__' || !authToken) return;
+    function downloadSessionFile() {
+      if (!currentAuthUser || !selectedAccountName || selectedAccountName === '__NEW__' || !currentAuthToken) return;
       const a = document.createElement('a');
-      a.href = `/api/users/${encodeURIComponent(currentUser)}/accounts/${encodeURIComponent(activeIg)}/session?token=${encodeURIComponent(authToken)}`;
-      a.download = `${activeIg}_session.json`;
+      a.href = `/api/users/${encodeURIComponent(currentAuthUser)}/accounts/${encodeURIComponent(selectedAccountName)}/session?token=${encodeURIComponent(currentAuthToken)}`;
+      a.download = `${selectedAccountName}_session.json`;
       document.body.appendChild(a);
       a.click();
       a.remove();
     }
 
-    async function saveTelegram() {
-      const fb = document.getElementById('tg-feedback');
+    async function saveTelegramSettings() {
+      const fb = document.getElementById('tg-save-status-msg');
       fb.textContent = 'Saving...';
+      fb.className = 'text-warn';
       try {
-        await api(`/api/users/${encodeURIComponent(currentUser)}/telegram`, {
+        await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/telegram`, {
           method: 'POST',
           body: JSON.stringify({
-            tg_chat_id: document.getElementById('tg-chat-id').value.trim(),
-            tg_admin_id: document.getElementById('tg-admin-id').value.trim(),
-            tg_token: document.getElementById('tg-token').value.trim()
+            tg_chat_id: document.getElementById('tg-field-chat').value.trim(),
+            tg_admin_id: document.getElementById('tg-field-admin').value.trim(),
+            tg_token: document.getElementById('tg-field-token').value.trim()
           })
         });
-        fb.textContent = 'Saved Telegram settings.';
+        fb.textContent = 'Telegram routing saved.';
         fb.className = 'text-ok';
+        showToast('Telegram settings updated');
         await refreshState();
-      } catch (e) {
-        fb.textContent = e.message;
+      } catch (err) {
+        fb.textContent = err.message;
         fb.className = 'text-err';
       }
     }
 
     async function unlinkTopic(threadId) {
-      if (!currentUser || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/unlink_topic`, {
+      if (!currentAuthUser || !selectedAccountName || selectedAccountName === '__NEW__') return;
+      await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/unlink_topic`, {
         method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg, thread_id: threadId })
+        body: JSON.stringify({ ig_username: selectedAccountName, thread_id: threadId })
       });
+      showToast(`Unlinked topic for thread ${threadId}`);
       await refreshState();
     }
 
-    async function quickCmd(cmd) {
-      document.getElementById('cmd-input').value = cmd;
-      await runBotCommand();
+    async function runPreset(cmd) {
+      document.getElementById('cmd-input-field').value = cmd;
+      await runCommand();
     }
 
-    async function runBotCommand() {
-      const inp = document.getElementById('cmd-input');
+    async function runCommand() {
+      const inp = document.getElementById('cmd-input-field');
       const cmd = inp.value.trim();
-      if (!cmd || !currentUser) return;
+      if (!cmd || !currentAuthUser) return;
       inp.value = '';
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/command`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg, command: cmd })
-      });
-      await refreshState();
-    }
-
-    async function submitCode() {
-      const code = document.getElementById('code-input').value.trim();
-      if (!code || !activeIg || activeIg === '__NEW__') return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/accounts/code`, {
-        method: 'POST',
-        body: JSON.stringify({ ig_username: activeIg, code })
-      });
-      document.getElementById('code-input').value = '';
-      await refreshState();
-    }
-
-    async function fetchLogs() {
-      if (!currentUser || !authToken) return;
       try {
-        const res = await api(`/api/users/${encodeURIComponent(currentUser)}/logs?since=${lastLogId}`);
-        const inc = res.logs || [];
-        if (inc.length > 0) {
-          logs.push(...inc);
-          if (logs.length > 400) logs = logs.slice(-400);
-          lastLogId = logs[logs.length - 1].id;
-          renderLogs();
-        } else if (logs.length === 0) {
-          renderLogs();
-        }
-      } catch (e) {
-        console.error(e);
+        await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/command`, {
+          method: 'POST',
+          body: JSON.stringify({ ig_username: selectedAccountName, command: cmd })
+        });
+        showToast(`Command executed: ${cmd}`);
+        await refreshState();
+      } catch (err) {
+        showToast(err.message, true);
       }
     }
 
-    function renderLogs() {
-      const box = document.getElementById('log-box');
-      if (logs.length === 0) {
-        box.innerHTML = '<div style="color: var(--text-muted);">No log output yet.</div>';
+    async function submit2FACode() {
+      const code = document.getElementById('challenge-input').value.trim();
+      if (!code || !selectedAccountName || selectedAccountName === '__NEW__') return;
+      await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/accounts/code`, {
+        method: 'POST',
+        body: JSON.stringify({ ig_username: selectedAccountName, code })
+      });
+      document.getElementById('challenge-input').value = '';
+      showToast('Verification code submitted');
+      await refreshState();
+    }
+
+    async function fetchLogsStream() {
+      if (!currentAuthUser || !currentAuthToken) return;
+      try {
+        const res = await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/logs?since=${latestLogId}`);
+        const incoming = res.logs || [];
+        if (incoming.length > 0) {
+          logItems.push(...incoming);
+          if (logItems.length > 500) logItems = logItems.slice(-500);
+          latestLogId = logItems[logItems.length - 1].id;
+          renderTerminal();
+        } else if (logItems.length === 0) {
+          renderTerminal();
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function renderTerminal() {
+      const box = document.getElementById('terminal-output-box');
+      if (logItems.length === 0) {
+        box.innerHTML = '<div style="color: var(--text-dim); padding: 8px;">No synchronization logs yet.</div>';
         return;
       }
-      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-      box.innerHTML = logs.map(l =>
-        `<div class="log-line"><span class="log-ts">${l.timestamp}</span><span class="log-lvl-${l.level}">${l.level}</span><span>${escapeHtml(l.message)}</span></div>`
+      const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 50;
+      box.innerHTML = logItems.map(l =>
+        `<div class="terminal-line"><span class="ts-dim">${l.timestamp}</span><span class="lvl-${l.level.toLowerCase()}">[${l.level}]</span><span>${escapeHtml(l.message)}</span></div>`
       ).join('');
       if (atBottom) box.scrollTop = box.scrollHeight;
     }
 
     async function clearLogs() {
-      if (!currentUser) return;
-      await api(`/api/users/${encodeURIComponent(currentUser)}/logs/clear`, { method: 'POST', body: '{}' });
-      logs = [];
-      lastLogId = 0;
-      renderLogs();
+      if (!currentAuthUser) return;
+      await apiCall(`/api/users/${encodeURIComponent(currentAuthUser)}/logs/clear`, { method: 'POST', body: '{}' });
+      logItems = [];
+      latestLogId = 0;
+      renderTerminal();
+      showToast('Logs cleared');
     }
 
     function downloadLogs() {
-      if (!currentUser) return;
-      const txt = logs.map(l => `${l.timestamp} [${l.level}] ${l.message}`).join('\n');
-      const blob = new Blob([txt], { type: 'text/plain;charset=utf-8' });
+      if (!currentAuthUser) return;
+      const text = logItems.map(l => `${l.timestamp} [${l.level}] ${l.message}`).join('\n');
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `${currentUser}_logs.txt`;
+      a.download = `hyperbridge_${currentAuthUser}_logs.txt`;
       document.body.appendChild(a);
       a.click();
       a.remove();
     }
 
-    function escapeHtml(s) {
-      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    function escapeHtml(str) {
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    document.getElementById('gate-username').addEventListener('keydown', e => {
-      if (e.key === 'Enter') document.getElementById('gate-password').focus();
+    // Keyboard Shortcuts
+    document.getElementById('gate-user').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('gate-pass').focus();
     });
-    document.getElementById('gate-password').addEventListener('keydown', e => {
-      if (e.key === 'Enter') submitWorkspaceAuth();
+    document.getElementById('gate-pass').addEventListener('keydown', e => {
+      if (e.key === 'Enter') submitAuth();
     });
-    document.getElementById('cmd-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') runBotCommand();
+    document.getElementById('cmd-input-field').addEventListener('keydown', e => {
+      if (e.key === 'Enter') runCommand();
     });
 
-    syncAuthUI();
+    // Start App
+    syncSessionState();
     setInterval(() => {
-      if (currentUser && authToken) refreshState();
+      if (currentAuthUser && currentAuthToken) refreshState();
     }, 3000);
   </script>
 </body>
