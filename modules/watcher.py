@@ -201,12 +201,12 @@ class WatcherModule(BaseModule):
 
     async def _ig(self, fn):
         if not self.ctx.ig.logged_in:
-            raise RuntimeError("Instagram is not logged in. Send /relogin.")
+            raise RuntimeError("Instagram is not connected. Use /connect.")
         return await self.ctx.ig._call(fn)
 
     async def _fetch(self, url: str) -> bytes | None:
         try:
-            return await self.ctx.bridge._fetch(url)
+            return await self.ctx.tg._fetch(url)
         except (media_utils.MediaError, requests.RequestException) as e:
             log.info("Could not download media (%s)", e)
             return None
@@ -225,14 +225,12 @@ class WatcherModule(BaseModule):
 
     # ------------------------------------------------------------------ where alerts go
     def _chats(self) -> list[int]:
-        """Alerts go to your private chat with the bot, or to the forum group if you chose that."""
-        admin, group = self.ctx.cfg.tg_admin_id, self.ctx.bridge.chat_id
-        if self._pref("alerts_to") == "group" and group:
-            return [group]
-        return [admin] if admin else ([group] if group else [])
+        """Alerts always go to your own chat with the bot."""
+        chat = self.ctx.tg.chat_id
+        return [chat] if chat else []
 
     async def _send_text(self, text: str) -> bool:
-        bot = self.ctx.bridge.bot
+        bot = self.ctx.tg.bot
         if not bot:
             return False
         for chat in self._chats():
@@ -363,7 +361,7 @@ class WatcherModule(BaseModule):
         else:
             link = f"https://www.instagram.com/p/{m.code}/" if getattr(m, "code", None) else f"https://www.instagram.com/{username}/"
         header = f"🔔 <b>@{esc(username)}</b> · new {label}\n"
-        bot, chats = self.ctx.bridge.bot, self._chats()
+        bot, chats = self.ctx.tg.bot, self._chats()
         if not bot or not chats:
             return False
         try:
@@ -492,7 +490,7 @@ class WatcherModule(BaseModule):
                 await self._send_text(f"👤 {tag} · profile updated\n" + "\n".join(f"• {c}" for c in changes))
                 if pic_changed:
                     data = await self._fetch(str(pic)) if pic else None
-                    bot, chats = self.ctx.bridge.bot, self._chats()
+                    bot, chats = self.ctx.tg.bot, self._chats()
                     if data and bot and chats:
                         try:
                             await bot.send_photo(chats[0], photo=data, caption=f"New profile picture of @{username}")
@@ -659,7 +657,6 @@ class WatcherModule(BaseModule):
 
     def list_view(self, notice: str = "") -> tuple[str, InlineKeyboardMarkup]:
         """The accounts being watched, with the actions that apply to the whole list."""
-        to = self._pref("alerts_to")
         lines = [f"<b>Watchlist</b>  {len(self._watch)} of {MAX_WATCH}", ""]
         if notice:
             lines = [notice, ""] + lines
@@ -670,7 +667,7 @@ class WatcherModule(BaseModule):
             lines.append("")
         for user, entry in self._watch.items():
             lines.append(f"@{esc(user)}: {summary(entry)}" + (" (paused)" if entry["paused"] else ""))
-        lines += ["", f"Alerts are sent to: {'the forum group' if to == 'group' else 'this chat'}"]
+        lines.append("")
         if self._watch:
             lines.append(f"Last check: {_ago(self._last_check)}")
         if time.time() < self._paused_until:
@@ -682,10 +679,7 @@ class WatcherModule(BaseModule):
             InlineKeyboardButton("Check now", callback_data=f"m:{PREFIX}:now:-"),
             InlineKeyboardButton("Resume all" if all_paused else "Pause all", callback_data=f"m:{PREFIX}:pa:-"),
         ])
-        rows.append([
-            InlineKeyboardButton(f"Alerts to: {'forum group' if to == 'group' else 'this chat'}", callback_data=f"m:{PREFIX}:to:-"),
-            InlineKeyboardButton("Back", callback_data="nav:settings"),
-        ])
+        rows.append([InlineKeyboardButton("Back", callback_data="nav:settings")])
         return "\n".join(lines), InlineKeyboardMarkup(rows)
 
     def _account_view(self, username: str) -> tuple[str, InlineKeyboardMarkup]:
@@ -722,12 +716,6 @@ class WatcherModule(BaseModule):
         act, _, arg = rest.partition(":")
         message = query.message
         if act == "ls":
-            await self._show(query, *self.list_view())
-            return
-        if act == "to":
-            prefs = getattr(self.ctx, "prefs", None)
-            if prefs:
-                await prefs.set("alerts_to", "dm" if prefs.get("alerts_to") == "group" else "group")
             await self._show(query, *self.list_view())
             return
         if act == "add":

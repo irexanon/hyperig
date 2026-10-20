@@ -71,7 +71,7 @@ def build(store, cl, bot):
 
     ig = NS(logged_in=True, cl=cl, _call=call)
     ctx = AppContext(cfg=NS(tg_admin_id=555, ig_timezone_offset=0), ig=ig, store=store,
-                     bridge=NS(bot=bot, chat_id=0, _fetch=fetch), prefs=Prefs(store))
+                     tg=NS(bot=bot, chat_id=555, _fetch=fetch), prefs=Prefs(store))
     mm = ModuleManager(ctx)
     ctx.modules = mm
     mm.load_modules()

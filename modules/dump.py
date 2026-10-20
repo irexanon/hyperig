@@ -87,7 +87,7 @@ class DumpModule(BaseModule):
     # ------------------------------------------------------------------ instagram helpers
     def _need_login(self) -> None:
         if not self.ctx.ig.logged_in:
-            raise RuntimeError("Instagram is not logged in. Send /relogin.")
+            raise RuntimeError("Instagram is not connected. Use /connect.")
 
     async def _ig(self, fn):
         """Run a blocking instagrapi call under the client's lock. fn is a no-argument callable."""
@@ -185,7 +185,7 @@ class DumpModule(BaseModule):
 
     async def _fetch(self, url: str) -> bytes | None:
         try:
-            return await self.ctx.bridge._fetch(url)
+            return await self.ctx.tg._fetch(url)
         except (media_utils.MediaError, requests.RequestException) as e:
             log.info("Could not download media (%s)", e)
             return None

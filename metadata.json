@@ -1,5 +1,0 @@
-{
-  "name": "Hyper Insta Bridge",
-  "description": "Bridges Instagram Direct Messages to Telegram forum topics using instagrapi, MQTT/FBNS realtime delivery, and python-telegram-bot.",
-  "requestFramePermissions": []
-}

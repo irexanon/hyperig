@@ -1,7 +1,6 @@
 """Tiny async key-value store with two backends.
 
-Used for three things: the Instagram session, the per-thread read cursors,
-and the Instagram-thread -> Telegram-topic mapping.
+Holds each user's saved Instagram session, settings and watchlist (keys are namespaced per Telegram user).
 
 * MongoStore  - used when MONGO_URI is set (survives redeploys / ephemeral disks)
 * FileStore   - default, JSON files under DATA_DIR (mount it as a volume in Docker)
@@ -101,12 +100,6 @@ class MongoStore(Store):
         await asyncio.to_thread(self._write, key, value)
 
 
-def sanitize_username(raw: str) -> str:
-    import re
-    clean = re.sub(r"[^a-z0-9._-]", "", (raw or "").strip().lower().lstrip("@"))
-    return clean[:64]
-
-
 def create_store(cfg) -> Store:
     if cfg.mongo_uri:
         try:
@@ -115,38 +108,3 @@ def create_store(cfg) -> Store:
             log.warning("Could not connect to MongoDB (%s), falling back to JSON files in %s", e, cfg.data_dir)
     log.info("MONGO_URI not set, using JSON files in %s", cfg.data_dir)
     return FileStore(cfg.data_dir)
-
-
-def create_user_store(base_cfg, username: str) -> Store:
-    uname = sanitize_username(username)
-    if not uname:
-        raise ValueError("Invalid username")
-    if base_cfg.mongo_uri:
-        try:
-            store = MongoStore(base_cfg.mongo_uri, base_cfg.mongo_db, collection_name=f"user_{uname}")
-            store.db["users_index"].replace_one({"_id": uname}, {"_id": uname}, upsert=True)
-            return store
-        except Exception as e:
-            log.warning("Could not connect to MongoDB for user %s (%s), using local files", uname, e)
-    user_dir = Path(base_cfg.data_dir) / "users" / uname
-    return FileStore(user_dir)
-
-
-def list_registered_users(base_cfg) -> list[str]:
-    users: set[str] = set()
-    if base_cfg.mongo_uri:
-        try:
-            from pymongo import MongoClient
-            client = MongoClient(base_cfg.mongo_uri, serverSelectionTimeoutMS=5000)
-            db = client[base_cfg.mongo_db]
-            for doc in db["users_index"].find({}):
-                if doc.get("_id"):
-                    users.add(str(doc["_id"]))
-        except Exception:
-            pass
-    users_dir = Path(base_cfg.data_dir) / "users"
-    if users_dir.exists() and users_dir.is_dir():
-        for child in users_dir.iterdir():
-            if child.is_dir() and not child.name.startswith("."):
-                users.add(child.name)
-    return sorted(users)

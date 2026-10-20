@@ -131,7 +131,7 @@ class CodePrompter:
             self._pending = fut
             self.hint = hint
         minutes = max(1, self.timeout // 60)
-        text = f"🔐 {hint}\nEnter the verification code in the Web Dashboard or reply on Telegram with /code 123456 (waiting {minutes} min)."
+        text = f"{hint}\nSend the verification code here (waiting {minutes} min)."
         log.info(text)
         if self._loop is not None and self._notify is not None:
             asyncio.run_coroutine_threadsafe(self._notify(text), self._loop)

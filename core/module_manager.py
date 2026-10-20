@@ -1,4 +1,4 @@
-"""Loads the built-in commands (core/session.py, core/status.py) and every plugin in modules/."""
+"""Loads every plugin in modules/."""
 import importlib
 import inspect
 import pkgutil
@@ -9,8 +9,6 @@ from utils.logger import get_logger
 
 log = get_logger("modules")
 
-SYSTEM_MODULES = ("core.session", "core.status")  # built in; everything else is a plugin in modules/
-
 
 class ModuleManager:
     def __init__(self, ctx):
@@ -20,8 +18,7 @@ class ModuleManager:
         self._callbacks: dict[str, tuple[object, BaseModule]] = {}
 
     def load_modules(self) -> None:
-        names = list(SYSTEM_MODULES)
-        names += [
+        names = [
             f"modules.{i.name}"
             for i in sorted(pkgutil.iter_modules(modules_pkg.__path__), key=lambda i: i.name)
             if not i.name.startswith("_") and i.name != "base"

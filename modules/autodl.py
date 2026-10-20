@@ -159,7 +159,7 @@ class AutoDownloadModule(BaseModule):
 
     def _need_login(self) -> None:
         if not self.ctx.ig.logged_in:
-            raise RuntimeError("Instagram is not logged in. Send /relogin or sign in from the dashboard.")
+            raise RuntimeError("Instagram is not connected. Connect your account with /connect.")
 
     async def _ig(self, fn):
         self._need_login()
