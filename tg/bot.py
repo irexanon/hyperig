@@ -97,14 +97,15 @@ class FetchIGBot:
 
     async def _post_init(self, app: Application) -> None:
         await app.bot.set_my_commands([
-            BotCommand("connect", "Connect your Instagram account"),
+            BotCommand("start", "Start Fetch IG "),
+            BotCommand("status", "Status"),
             BotCommand("dl", "Download an Instagram link"),
             BotCommand("dump", "Profile tools"),
             BotCommand("watch", "Watch an account"),
             BotCommand("watchlist", "Manage watched accounts"),
-            BotCommand("status", "Status"),
             BotCommand("settings", "Settings"),
             BotCommand("help", "All commands"),
+            BotCommand("connect", "Connect your Instagram account"),
             BotCommand("logout", "Disconnect and delete your data"),
         ])
         for uid in await self.root_store.get(USERS_KEY, []) or []:
