@@ -36,4 +36,3 @@ Set `MONGO_URI` to keep data on a database instead of files. Instagram flags dat
 
 Drop a file in `modules/` with a `BaseModule` subclass. It is loaded for every user automatically. See `modules/status.py` for the smallest example.
 
-Tests: `python -m pytest -q tests`
